@@ -290,6 +290,37 @@ repeat:
 }
 
 
+/*****************************************************************************
+ *
+ * 这一段在前面写过了，不过还是复制过来放在这儿比较好，方便理解
+ *
+ *
+ *
+ * 要看懂这个函数，必须先解释一下 netfilter hook list 的组织结构
+ * 这个 hooks 定义的位置为
+ *   struct net
+ *       nf: struct netns_nf
+ *           hooks: struct list_head[NFPROTO_NUMPROTO][NF_MAX_HOOKS]
+ * 
+ *   显示的定义如下
+ *       struct list_head hooks[NFPROTO_NUMPROTO][NF_MAX_HOOKS];
+ * 
+ * 从定义可以看出，其就是一个二维链表数组，其每一个元素都是一个链表头
+ *
+ * 第一维为 L3 协议类型，如 NFPROTO_ARP, NFPROTO_IPV4, NFPROTO_IPV6,
+ * (令人意外的是，还存在 NFPROTO_BRIDGE, 应该是为 br_netfilter 准备的 ？？)
+ *
+ * 第二维是 CHAIN 类型，如: 
+ *         NF_INET_POST_ROUTING,
+ *         NF_INET_PRE_ROUTING,
+ *         NF_INET_LOCAL_IN,
+ *         NF_INET_FORWARD,
+ *         .........
+ *         NF_BR_FORWARD,
+ *         .........
+ *
+ * 
+ * ***************************************************************************/
 /* Returns 1 if okfn() needs to be executed by the caller,
  * -EPERM for NF_DROP, 0 otherwise. */
 int nf_hook_slow(struct sk_buff *skb, struct nf_hook_state *state)
@@ -302,7 +333,12 @@ int nf_hook_slow(struct sk_buff *skb, struct nf_hook_state *state)
 	rcu_read_lock();
 
 	elem = list_entry_rcu(state->hook_list, struct nf_hook_ops, list);
+
 next_hook:
+	/****************************************************************
+	 * 暂时不知道 iptables 规则在 kernel 中是如何分类组织的，这一点
+	 * 要继续的学习一个
+	 * *************************************************************/
 	verdict = nf_iterate(state->hook_list, skb, state, &elem);
 	if (verdict == NF_ACCEPT || verdict == NF_STOP) {
 		ret = 1;
@@ -312,6 +348,10 @@ next_hook:
 		if (ret == 0)
 			ret = -EPERM;
 	} else if ((verdict & NF_VERDICT_MASK) == NF_QUEUE) {
+		/***********************************************
+		 * 如果 target 是QUEUE，则会通过netlink发送到
+		 * 用户空间，以供用户空间程序读取和修改
+		 * ********************************************/
 		int err = nf_queue(skb, elem, state,
 				   verdict >> NF_VERDICT_QBITS);
 		if (err < 0) {

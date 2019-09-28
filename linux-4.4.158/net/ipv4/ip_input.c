@@ -200,8 +200,17 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 		int raw;
 
 	resubmit:
+		/******************************************
+		 * 如果当前存在RAWsocket，则交给 RAW socket
+		 * 一份进行处理 (此处会clone skb)
+		 *
+		 * ***************************************/
 		raw = raw_local_deliver(skb, protocol);
 
+		/**********************************************
+		 * 通过协议号找到相应的协议，然后调用其handler
+		 * 将skb交给他处理
+		 * *******************************************/
 		ipprot = rcu_dereference(inet_protos[protocol]);
 		if (ipprot) {
 			int ret;
@@ -215,11 +224,27 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 			}
 			ret = ipprot->handler(skb);
 			if (ret < 0) {
+				/*******************************************
+				 * Q: 为什么上层处理失败要 resubmit ？？？？
+				 *
+				 *
+				 * A: 此处的返回值是有特殊意义的, 返回
+				 * 负值不是表示处理失败，而是表示这个
+				 * 包是封装用的，封装的负载还是一个L4
+				 * 的协议，所以返回 （-protocol），通知
+				 * 当前函数再次递送当前包到相对应的
+				 * L4协议进行处理。
+				 *
+				 * ****************************************/
 				protocol = -ret;
 				goto resubmit;
 			}
 			IP_INC_STATS_BH(net, IPSTATS_MIB_INDELIVERS);
 		} else {
+			/**************************************************
+			 * 如果没有相对应的L4协议处理，则看看RAW有没有处理，
+			 * 如果 RAW 也没有处理，然返回协议不可达ICMP报文
+			 * ************************************************/
 			if (!raw) {
 				if (xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
 					IP_INC_STATS_BH(net, IPSTATS_MIB_INUNKNOWNPROTOS);
@@ -229,6 +254,10 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 				kfree_skb(skb);
 			} else {
 				IP_INC_STATS_BH(net, IPSTATS_MIB_INDELIVERS);
+				/************************************************
+				 * 如果这个SKB被 RAW消费了，则更新统计信息
+				 * 然后 kfree_skb
+				 * **********************************************/
 				consume_skb(skb);
 			}
 		}
@@ -244,16 +273,33 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
  */
 int ip_local_deliver(struct sk_buff *skb)
 {
+	/****************************************************\
+	 * 发往本机的包会走到此处，然后送到上层协议去处理
+	 *
+	 * **************************************************/
 	/*
 	 *	Reassemble IP fragments.
 	 */
 	struct net *net = dev_net(skb->dev);
-
+         
+	/*****************************************************
+	 * 如果包是分片包则进行分片重组，如果分片还没有收完，
+	 * 则 ip_defrag 会将分片包放入分片队列，等待全部的
+	 * 分片到达
+	 * ***************************************************/
 	if (ip_is_fragment(ip_hdr(skb))) {
 		if (ip_defrag(net, skb, IP_DEFRAG_LOCAL_DELIVER))
 			return 0;
 	}
+	
 
+	/*****************************************************\
+	 * 在此处的包都是完整包，不存在分片的情况，
+	 * 现在开始过 INPUT chain，
+	 * 如果在 INPUT 中没有被 DROP 或 REJECT，
+	 * 则调用 ip_local_deliver_finish 交给上层协议
+	 * (这些协议是通过 inet_add_protocol 注册的)
+	 * ***************************************************/
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_IN,
 		       net, NULL, skb, skb->dev, NULL,
 		       ip_local_deliver_finish);
@@ -328,13 +374,34 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 		}
 	}
 
-	/*
+	/******************************************************************
 	 *	Initialise the virtual path cache for the packet. It describes
 	 *	how the packet travels inside Linux networking.
-	 */
+	 *
+	 *  根据前述的 __netif_receive_skb_core 中的实现，一个包
+	 *  可能会被多次deliver到上层，所以之前可能已经做过
+	 *  ip_route_input_noref 这个查找的动作，此处直接使用缓存就可以了，
+	 *  也算是一种优化方式。
+	 *
+	 *  对于 skb_valid_dst 和 skb_dst, 其使用的是 sk_buff 中的一个
+	 *  叫 _skb_refdst 的成员, 这个成员在 sk_buff 中定义为一个整形
+	 *  但其实他是一个指向 dst_entry 的指针。
+	 *
+	 *  在skb_clone的时候，其实这个指针是被直接赋值给clone的skb的
+	 *  也就是说，dst_entry 不会被复制，而是直接被复用了。
+	 *****************************************************************/
 	if (!skb_valid_dst(skb)) {
+
+		/***********************************************************
+		 * 如果当前没有dst，说明是第一次上到协议栈，那就进行dst查找
+		 * 来确定这个skb的走向， 可能是 多播/广播/本机/转发
+		 * dst_entry 中的 input（xxx）函数也会在这里进行初始化，
+		 * 以此来让相应的模块或协议来处理相应的包
+		 * *********************************************************/
 		int err = ip_route_input_noref(skb, iph->daddr, iph->saddr,
 					       iph->tos, skb->dev);
+
+		/* 如果查不到相应的dst_entry，则简单的丢弃这个包好了 */
 		if (unlikely(err)) {
 			if (err == -EXDEV)
 				NET_INC_STATS_BH(net, LINUX_MIB_IPRPFILTER);
@@ -353,15 +420,37 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 	}
 #endif
 
+	/**************************************************
+	 * 检查和处理ip包的 options，如果有问题则丢弃这个包
+	 *
+	 * ***********************************************/
 	if (iph->ihl > 5 && ip_rcv_options(skb))
 		goto drop;
 
+
+	/*********************************************************
+	 * 获取路由表项，其实就是之前的 dst_entry, 前面已经进行了
+	 * skb dst的查找，查找不到的已经被丢弃了，能走到这儿的说明
+	 * 一定存在相对应的表项
+	 *
+	 * 此处用于更新路由表的状态（统计信息？？？）
+	 * ******************************************************/
 	rt = skb_rtable(skb);
 	if (rt->rt_type == RTN_MULTICAST) {
 		IP_UPD_PO_STATS_BH(net, IPSTATS_MIB_INMCAST, skb->len);
 	} else if (rt->rt_type == RTN_BROADCAST)
 		IP_UPD_PO_STATS_BH(net, IPSTATS_MIB_INBCAST, skb->len);
 
+
+	/*********************************************************
+	 * 将包送给相应的 input 函数去处理：
+	 *   ip_forward ?
+	 *   ip_local_input ?
+	 *   .......        ?
+	 *
+	 *   如上述所说，由那个处理是由
+	 *   ip_route_input_noref 这个函数来选择的。
+	 * ******************************************************/
 	return dst_input(skb);
 
 drop:
@@ -387,7 +476,13 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 
 	net = dev_net(dev);
 	IP_UPD_PO_STATS_BH(net, IPSTATS_MIB_IN, skb->len);
-
+	
+	/*************************************************
+	 * 如果当前的skb的users成员大于1, 则调用skb_clone
+	 * 来clone一份skb
+	 * （deliver_skb的时候会先做 atomic_inc(&skb->users) 然后再调用ip_rcv）
+	 * 
+	 * */
 	skb = skb_share_check(skb, GFP_ATOMIC);
 	if (!skb) {
 		IP_INC_STATS_BH(net, IPSTATS_MIB_INDISCARDS);
@@ -444,6 +539,9 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 		goto drop;
 	}
 
+	/*******************************************************
+	 * 计算出 transport_header 的位置
+	 * *****************************************************/
 	skb->transport_header = skb->network_header + iph->ihl*4;
 
 	/* Remove any debris in the socket control block */
@@ -452,6 +550,20 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	/* Must drop socket now because of tproxy. */
 	skb_orphan(skb);
 
+	/*******************************************************
+	 * 做完IP包的基础性检查后，开始过 netfilter，
+	 *
+	 * 如果过了netfilter, 则调用 ip_rcv_finish 
+	 *
+	 * 将包传递到上层协议处理,
+	 *
+	 * 此时走的是 PREROUTING 表，路由选择还没有进行，
+	 *
+	 * 等到 ip_rcv_finish 中进行路由选择后，会确定包的走向，
+	 * 设定 input 调用，如果是本地收包，就会在 ip_local_input中
+	 * 走 INPUT chain，如果是转发包，则会在 ip_forward 中
+	 * 走 FORWARD chain
+	 * *****************************************************/
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 		       net, NULL, skb, dev, NULL,
 		       ip_rcv_finish);

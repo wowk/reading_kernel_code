@@ -72,6 +72,7 @@ static int ip_forward_finish(struct net *net, struct sock *sk, struct sk_buff *s
 		ip_forward_options(skb);
 
 	skb_sender_cpu_clear(skb);
+	/********ip_output**************/
 	return dst_output(net, sk, skb);
 }
 
@@ -83,6 +84,10 @@ int ip_forward(struct sk_buff *skb)
 	struct ip_options *opt	= &(IPCB(skb)->opt);
 	struct net *net;
 
+	/**********************************************
+	 * Kernel 中太多这种重复的检查，不过毕竟是内核
+	 * 如果不检查又不安全，所以还是检查一下为妙
+	 * *******************************************/
 	/* that should never happen */
 	if (skb->pkt_type != PACKET_HOST)
 		goto drop;
@@ -110,15 +115,24 @@ int ip_forward(struct sk_buff *skb)
 	if (ip_hdr(skb)->ttl <= 1)
 		goto too_many_hops;
 
+	/*****************************************
+	 * 查找对应的路由项，找到该发往谁，
+	 * 如果找不着，则丢弃这个包
+	 * **************************************/
 	if (!xfrm4_route_forward(skb))
 		goto drop;
 
 	rt = skb_rtable(skb);
 
 	if (opt->is_strictroute && rt->rt_uses_gateway)
+		/********此处 sr 应该是 skb rtable 的缩写**********/
 		goto sr_failed;
 
 	IPCB(skb)->flags |= IPSKB_FORWARDED;
+
+	/***************************************************
+	 * 检查包的大小和MTU，如果大于MTU则返回ICMP错误
+	 * *************************************************/
 	mtu = ip_dst_mtu_maybe_forward(&rt->dst, true);
 	if (ip_exceeds_mtu(skb, mtu)) {
 		IP_INC_STATS(net, IPSTATS_MIB_FRAGFAILS);
@@ -142,9 +156,16 @@ int ip_forward(struct sk_buff *skb)
 	if (IPCB(skb)->flags & IPSKB_DOREDIRECT && !opt->srr &&
 	    !skb_sec_path(skb))
 		ip_rt_send_redirect(skb);
-
+    /*********************************************************
+	 * 根据TOS来设定SKB的优先级
+	 * ******************************************************/
 	skb->priority = rt_tos2priority(iph->tos);
 
+	/*********************************************************
+	 * 开始过 FORWARD 表，如果没被丢弃的话，就进入 
+	 * ip_forward_finish
+	 * 进行转发
+	 * ******************************************************/
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_FORWARD,
 		       net, NULL, skb, skb->dev, rt->dst.dev,
 		       ip_forward_finish);

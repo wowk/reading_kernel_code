@@ -4317,22 +4317,45 @@ struct sk_buff *skb_vlan_untag(struct sk_buff *skb)
 	struct vlan_hdr *vhdr;
 	u16 vlan_tci;
 
+	/***********************************************
+	 * skb_vlan_tag_present 的作用：
+	 *	   检查VLAN TCI字段中 CFI 这个标志位有没有
+	 *	   置位，有的话表示当前帧是令牌环帧或FDDI
+	 *	   帧。
+	 *	   如果没有置位，则表示当前是以太网帧。
+	 *	   一般情况下物理层都是以太网，所以加个
+	 *	   unlikely优化下
+	 *     
+     *     #define VLAN_TAG_PRESENT	VLAN_CFI_MASK
+	 * *********************************************/
 	if (unlikely(skb_vlan_tag_present(skb))) {
 		/* vlan_tci is already set-up so leave this for another time */
 		return skb;
 	}
 
+    /*****************************************************
+	 * 检查当前帧是不是共享帧，如果是则克隆该帧然后返回，
+	 * 因为我们要修改该帧（脱去VLAN tag），所以不想和
+	 * 别人共享
+	 * **************************************************/
 	skb = skb_share_check(skb, GFP_ATOMIC);
 	if (unlikely(!skb))
 		goto err_free;
 
+
+	/* 检查skb 的长度合法性，稍后分析*/
 	if (unlikely(!pskb_may_pull(skb, VLAN_HLEN)))
 		goto err_free;
 
+	/***************************************************
+	 * 从这儿可以看出，skb->data 是指向三层头的，但是
+	 * 在哪里设置的还需要看一下
+	 * ************************************************/
 	vhdr = (struct vlan_hdr *)skb->data;
 	vlan_tci = ntohs(vhdr->h_vlan_TCI);
 	__vlan_hwaccel_put_tag(skb, skb->protocol, vlan_tci);
 
+	/* 跳过vlan头 */
 	skb_pull_rcsum(skb, VLAN_HLEN);
 	vlan_set_encap_proto(skb, vhdr);
 

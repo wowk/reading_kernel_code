@@ -206,9 +206,24 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 
 	rcu_read_lock_bh();
 	nexthop = (__force u32) rt_nexthop(rt, ip_hdr(skb)->daddr);
+
+	/****************************************************************
+	 * 此处会通过 __ipv4_neigh_lookup_noref 进行 neigh entry 的查询，
+	 * 如果没有entry则创建 neigh entry，状态会设为 NUD_NONE (neigh_alloc中设定)
+	 * */
 	neigh = __ipv4_neigh_lookup_noref(dev, nexthop);
 	if (unlikely(!neigh))
 		neigh = __neigh_create(&arp_tbl, &nexthop, dev, false);
+
+
+	/****************************************************************
+	 * dst_neigh_output 会根据 neigh 的状态做相应的动作
+	 * 内部会调到 neigh_event_send 这部分会另外讲述，其
+	 * 设计到 neigh 的 output 这个虚函数指针，根据 neigh
+	 * 的state 会动态改变, 以此来决定是否转发包以及是否
+	 * 发送 ARP（IPv6中是 NS）
+	 *
+	 * **************************************************************/
 	if (!IS_ERR(neigh)) {
 		int res = dst_neigh_output(dst, neigh, skb);
 
@@ -278,13 +293,28 @@ static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *sk
 		return dst_output(net, sk, skb);
 	}
 #endif
+	/*********************************************
+	 * GSO（generic segment offload）
+	 * TSO（tcp segment offload）
+	 * 是一种利用网卡对大的数据包进行自动分段的技术
+	 * 当前先不考虑这儿，稍后再看。
+	 * ******************************************/
 	mtu = ip_skb_dst_mtu(skb);
 	if (skb_is_gso(skb))
 		return ip_finish_output_gso(net, sk, skb, mtu);
+                 
 
+	/********************************************************
+	 * 如果包大于MTU，则对包进行分片，分完片再调用
+	 * ip_finish_output2
+	 *
+	 * ******************************************************/
 	if (skb->len > mtu || (IPCB(skb)->flags & IPSKB_FRAG_PMTU))
 		return ip_fragment(net, sk, skb, mtu, ip_finish_output2);
 
+	/********************************************************
+	 * 正常尺寸的包就直接走这儿了
+	 * *****************************************************/
 	return ip_finish_output2(net, sk, skb);
 }
 
@@ -354,11 +384,21 @@ int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	struct net_device *dev = skb_dst(skb)->dev;
 
+	/************************************************
+	 * 像这种Code都是更新包统计数据用的，不用关注
+	 * *********************************************/
 	IP_UPD_PO_STATS(net, IPSTATS_MIB_OUT, skb->len);
 
 	skb->dev = dev;
 	skb->protocol = htons(ETH_P_IP);
 
+	/*******************************************************
+	 * 简单的两件事，先过 POSTROUTING，然后调用
+	 * ip_finish_output
+	 *
+	 * 注意：因为是转发包，所以不会走OUTPUT chain
+	 *
+	 * ****************************************************/
 	return NF_HOOK_COND(NFPROTO_IPV4, NF_INET_POST_ROUTING,
 			    net, sk, skb, NULL, dev,
 			    ip_finish_output,

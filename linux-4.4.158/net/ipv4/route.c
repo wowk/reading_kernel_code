@@ -1529,6 +1529,11 @@ static int ip_route_input_mc(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	if (our)
 		flags |= RTCF_LOCAL;
 
+	/********************************************************************
+	 * 这地方也走ip_local_deliver ???
+	 *
+	 * 好吧，最终还是要送到上层的
+	 * ******************************************************************/
 	rth = rt_dst_alloc(dev_net(dev)->loopback_dev, flags, RTN_MULTICAST,
 			   IN_DEV_CONF_GET(in_dev, NOPOLICY), false, false);
 	if (!rth)
@@ -1698,7 +1703,11 @@ rt_cache:
 	if (res->table)
 		rth->rt_table_id = res->table->tb_id;
 	RT_CACHE_STAT_INC(in_slow_tot);
-
+    /***********************************************
+	 * 覆盖在 rt_dst_alloc 中默认 input 设为
+	 * ip_local_deliver 的设定， 将其设为
+	 * ip_forward, 这样包就交由转发系统去处理了
+	 * ********************************************/
 	rth->dst.input = ip_forward;
 
 	rt_set_nexthop(rth, daddr, res, fnhe, res->fi, res->type, itag);
@@ -1706,6 +1715,11 @@ rt_cache:
 		rth->dst.lwtstate->orig_output = rth->dst.output;
 		rth->dst.output = lwtunnel_output;
 	}
+
+	/*************************************************
+	 * 暂时不关心 lwtunnel 这些和隧道相关的 Code
+	 *
+	 * ***********************************************/
 	if (lwtunnel_input_redirect(rth->dst.lwtstate)) {
 		rth->dst.lwtstate->orig_input = rth->dst.input;
 		rth->dst.input = lwtunnel_input;
@@ -1868,9 +1882,16 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		goto no_route;
 	}
 
+	/******************************************************
+	 * 如果包是发往 broadcast 的，则跳到brd_input逻辑进行处理
+	 * ***************************************************/
 	if (res.type == RTN_BROADCAST)
 		goto brd_input;
 
+
+	/******************************************************
+	 * 如果包是发往 local 的，则跳到local_input逻辑进行处理
+	 * ***************************************************/
 	if (res.type == RTN_LOCAL) {
 		err = fib_validate_source(skb, saddr, daddr, tos,
 					  0, dev, in_dev, &itag);
@@ -1879,6 +1900,11 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		goto local_input;
 	}
 
+
+	/******************************************************
+	 * 如果包是发往 Other HOST 的，
+	 * 则将指针初始化为 ip_forward 进行处理
+	 * ***************************************************/
 	if (!IN_DEV_FORWARD(in_dev)) {
 		err = -EHOSTUNREACH;
 		goto no_route;
@@ -1886,6 +1912,9 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	if (res.type != RTN_UNICAST)
 		goto martian_destination;
 
+	/*****************************************************
+	 * 这个函数是实际会将input 设为 ip_forward 的地方
+	 * ***************************************************/
 	err = ip_mkroute_input(skb, &res, &fl4, in_dev, daddr, saddr, tos);
 out:	return err;
 
@@ -1916,7 +1945,11 @@ local_input:
 			do_cache = true;
 		}
 	}
-
+    /**************************************************************\
+	 * 在这儿是对 local_input 包的处理
+	 * 此处会调用 rt_dst_alloc 函数，将input设为 ip_local_deliver
+	 *
+	 * ************************************************************/
 	rth = rt_dst_alloc(net->loopback_dev, flags | RTCF_LOCAL, res.type,
 			   IN_DEV_CONF_GET(in_dev, NOPOLICY), false, do_cache);
 	if (!rth)
@@ -2002,6 +2035,12 @@ int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		if (in_dev) {
 			int our = ip_check_mc_rcu(in_dev, daddr, saddr,
 						  ip_hdr(skb)->protocol);
+
+			/***********************************************
+			 * 检查多播地址是不是发往接收设备的，如果是则
+			 * 进入 ip_route_input_mc 来设置多播 input 函数，
+			 * 否则直接返回，ip_rcv_finish 会把包丢弃掉
+			 * *********************************************/
 			if (our
 #ifdef CONFIG_IP_MROUTE
 				||
@@ -2009,6 +2048,13 @@ int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 			     IN_DEV_MFORWARD(in_dev))
 #endif
 			   ) {
+
+				/*************************************************
+				 * 看了下，这儿对多播的处理的input函数还是要送到
+				 * ip_local_deliver 函数处理，
+				 * 但是，如果 CONFIG_IP_MROUTE 打开的话，就会送到
+				 * ip_mr_input 函数来处理
+				 * ************************************************/
 				int res = ip_route_input_mc(skb, daddr, saddr,
 							    tos, dev, our);
 				rcu_read_unlock();
@@ -2018,6 +2064,12 @@ int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		rcu_read_unlock();
 		return -EINVAL;
 	}
+
+
+
+	/******************************************************
+	 * 到达这儿说明包不是多播，那就看他是转发还是本地收包
+	 * ***************************************************/
 	res = ip_route_input_slow(skb, daddr, saddr, tos, dev);
 	rcu_read_unlock();
 	return res;

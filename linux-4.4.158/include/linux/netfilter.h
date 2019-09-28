@@ -177,13 +177,63 @@ static inline int nf_hook_thresh(u_int8_t pf, unsigned int hook,
 				 int (*okfn)(struct net *, struct sock *, struct sk_buff *),
 				 int thresh)
 {
+    /*****************************************************************************
+	 * 要看懂这个函数，必须先解释一下 netfilter hook list 的组织结构
+	 * 这个 hooks 定义的位置为
+	 *   struct net
+	 *       nf: struct netns_nf
+	 *           hooks: struct list_head[NFPROTO_NUMPROTO][NF_MAX_HOOKS]
+	 * 
+	 *   显示的定义如下
+	 *       struct list_head hooks[NFPROTO_NUMPROTO][NF_MAX_HOOKS];
+	 * 
+	 * 从定义可以看出，其就是一个二维链表数组，其每一个元素都是一个链表头
+	 *
+	 * 第一维为 L3 协议类型，如 NFPROTO_ARP, NFPROTO_IPV4, NFPROTO_IPV6,
+	 * (令人意外的是，还存在 NFPROTO_BRIDGE, 应该是为 br_netfilter 准备的 ？？)
+	 *
+	 * 第二维是 CHAIN 类型，如: 
+	 *         NF_INET_POST_ROUTING,
+	 *         NF_INET_PRE_ROUTING,
+	 *         NF_INET_LOCAL_IN,
+	 *         NF_INET_FORWARD,
+	 *         .........
+	 *         NF_BR_FORWARD,
+	 *         .........
+	 * 
+	 *
+	 * 现在举个例子：
+	 *      我们想要找到 iptables 的 PREROUTING chain，
+	 *      则应该这样写：
+	 *           hook_list = &net->nf.hooks[NFPROTO_IPV4][NF_INET_PRE_ROUTING]
+	 * 
+	 *
+	 * 需要注意的是， iptables 中的不同表（nat，mangle，filter）的
+	 * PRETOUING，INPUT，OUTPUT 等 CHAIN 都是在同一个链表中的，怎么区分
+	 * 在 nf_hook_slow 中讲述
+	 *
+	 * ***************************************************************************/
 	struct list_head *hook_list = &net->nf.hooks[pf][hook];
 
-	if (nf_hook_list_active(hook_list, pf, hook)) {
-		struct nf_hook_state state;
 
+
+
+
+
+	if (nf_hook_list_active(hook_list, pf, hook)) { // check if hook list is empty
+        /* hook list is not empty, go through it */
+		struct nf_hook_state state;
+        
+        /* put all arguments into nf_hook_state for benifit*/
+		/*****************************************************
+		 * 将所有参数放在 state 中，然后传给
+		 * nf_hook_slow, 有点脱裤子放屁的意味,
+		 * 不过。。。。。咩。。。。。
+		 * **************************************************/
 		nf_hook_state_init(&state, hook_list, hook, thresh,
 				   pf, indev, outdev, sk, net, okfn);
+
+        /* go through this list */
 		return nf_hook_slow(skb, &state);
 	}
 	return 1;
@@ -209,6 +259,9 @@ static inline int nf_hook(u_int8_t pf, unsigned int hook, struct net *net,
    > I don't want nf_hook to return anything because people might forget
    > about async and trust the return value to mean "packet was ok".
 
+   >>> 但是你还是返回了，不得不返回，不这样的话谁知道这包是什么情况
+
+
    AK:
    Just document it clearly, then you can expect some sense from kernel
    coders :)
@@ -221,8 +274,19 @@ NF_HOOK_THRESH(uint8_t pf, unsigned int hook, struct net *net, struct sock *sk,
 	       int (*okfn)(struct net *, struct sock *, struct sk_buff *),
 	       int thresh)
 {
+	/**********************************************************************
+	 * 这儿开始走 iptables 规则, 其基本上就是遍历链表的过程
+	 * *******************************************************************/
 	int ret = nf_hook_thresh(pf, hook, net, sk, skb, in, out, okfn, thresh);
-	if (ret == 1)
+
+	/**********************************************************************
+	 * 如果包被 ACCEPT 了，则调用相应的处理函数，如：
+	 *       ip_input_finish, ip_finish_output, ip_forward_finish .........
+	 *       ip6_input_finish, ip6_finish_output, ip6_forward_finish ........
+	 *       等等等等
+	 *       （函数名字可能不一定对，但是大差不离，稍后会修正）
+	 * *******************************************************************/
+	if (ret == NF_ACCEPT) /* 1 means NF_ACCEPT */
 		ret = okfn(net, sk, skb);
 	return ret;
 }
@@ -241,6 +305,10 @@ NF_HOOK_COND(uint8_t pf, unsigned int hook, struct net *net, struct sock *sk,
 	return ret;
 }
 
+/****************************************************************************************
+ * 这个NF_HOOK不得了，他是整个 netfilter 框架的入口点
+ * 现在看看他是怎么处理流经的包的
+ * *************************************************************************************/
 static inline int
 NF_HOOK(uint8_t pf, unsigned int hook, struct net *net, struct sock *sk, struct sk_buff *skb,
 	struct net_device *in, struct net_device *out,

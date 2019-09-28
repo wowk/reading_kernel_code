@@ -191,32 +191,39 @@ static int __init br_init(void)
 
 	BUILD_BUG_ON(sizeof(struct br_input_skb_cb) > FIELD_SIZEOF(struct sk_buff, cb));
 
+    /* 注册STP协议处理 */
 	err = stp_proto_register(&br_stp_proto);
 	if (err < 0) {
 		pr_err("bridge: can't register sap for STP\n");
 		return err;
 	}
-
+    
+    /* 初始化转发表 */
 	err = br_fdb_init();
 	if (err)
 		goto err_out;
 
+    /* 将协议处理模块添加到每个网络空间中 */
 	err = register_pernet_subsys(&br_net_ops);
 	if (err)
 		goto err_out1;
 
+    /*  */
 	err = br_nf_core_init();
 	if (err)
 		goto err_out2;
 
+    /* 注册网络设备通知处函数，当网络设备发生事件时，这个函数会被调用 */
 	err = register_netdevice_notifier(&br_device_notifier);
 	if (err)
 		goto err_out3;
-
+    
+    /* 注册switch设备事件处理函数 */
 	err = register_switchdev_notifier(&br_switchdev_notifier);
 	if (err)
 		goto err_out4;
 
+    /* netlink 相关事件处理 */
 	err = br_netlink_init();
 	if (err)
 		goto err_out5;

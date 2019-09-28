@@ -1260,6 +1260,7 @@ int __init br_netlink_init(void)
 {
 	int err;
 
+    /* MDB netlink 注册 */
 	br_mdb_init();
 	rtnl_af_register(&br_af_ops);
 

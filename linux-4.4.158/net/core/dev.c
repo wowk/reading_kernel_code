@@ -1828,6 +1828,7 @@ static inline void deliver_ptype_list_skb(struct sk_buff *skb,
 {
 	struct packet_type *ptype, *pt_prev = *pt;
 
+	/* 找到相应的协议处理函数 */
 	list_for_each_entry_rcu(ptype, ptype_list, list) {
 		if (ptype->type != type)
 			continue;
@@ -3899,6 +3900,17 @@ static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
 		skb_reset_transport_header(skb);
 	skb_reset_mac_len(skb);
 
+
+	/***************************************************************
+	 *
+	 *
+	 *
+	 *
+	 *
+	 *
+	 *
+	 *
+	 * *************************************************************/
 	pt_prev = NULL;
 
 another_round:
@@ -3906,8 +3918,18 @@ another_round:
 
 	__this_cpu_inc(softnet_data.processed);
 
+	/***********************************************
+	 * 此处的protol是 二层头中包含的三层协议号,
+	 * 也可能是 VLAN 头的协议号
+	 * *********************************************/
 	if (skb->protocol == cpu_to_be16(ETH_P_8021Q) ||
 	    skb->protocol == cpu_to_be16(ETH_P_8021AD)) {
+		/* **********************************************************
+		 * 脱掉VLAN tag
+		 * 注意，如果当前skb不是以太网帧，tag是不会被脱掉的
+		 * 而是原样返回，下面会对这种非以太网帧（如令牌环，FDDI，...）
+		 * 做单独的处理
+		 * *********************************************************/
 		skb = skb_vlan_untag(skb);
 		if (unlikely(!skb))
 			goto out;
@@ -3923,13 +3945,18 @@ another_round:
 	if (pfmemalloc)
 		goto skip_taps;
 
+
+	/* 对于全局嗅探器创建的PACKET socket的处理 */
 	list_for_each_entry_rcu(ptype, &ptype_all, list) {
 		if (pt_prev)
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 		pt_prev = ptype;
 	}
-
+    
+	/* 对于设备指定嗅探器创建的PACKET socket的处理 */
 	list_for_each_entry_rcu(ptype, &skb->dev->ptype_all, list) {
+		/* 此处对每个pktype都延迟传送的上层，
+		 * 目的就是为了优化，少做一次clone和free*/
 		if (pt_prev)
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 		pt_prev = ptype;
@@ -3950,10 +3977,21 @@ skip_taps:
 	skb->tc_verd = 0;
 ncls:
 #endif
+
+    /* 忽略这个，内存管理相关，优化用的, 目前暂时不考虑 */
 	if (pfmemalloc && !skb_pfmemalloc_protocol(skb))
 		goto drop;
 
+
+	/******************************************************
+	 * 这儿就是呼应上面脱VLAN tag时做的检查，如果是非以太网
+	 * 帧，VLAN头是不会被脱掉的，而是在这儿单独处理
+	 * ****************************************************/
 	if (skb_vlan_tag_present(skb)) {
+		/*********************************************
+		 * 先处理延迟的pt_prev
+		 * 然后交由vlan_do_receive来处理
+		 * *******************************************/
 		if (pt_prev) {
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 			pt_prev = NULL;
@@ -3964,8 +4002,26 @@ ncls:
 			goto out;
 	}
 
+	/*******************************************************
+	 * 设备定义了rx_handler,则首先执行rx_handler,
+	 * rx_handler会先对这个包进行处理，这个包可能会被
+	 * rx_handler消费掉或修改掉，如果被消费掉，则会结束处理
+	 * 否则继续传递给上层
+	 *
+	 * 通过调用 
+	 * netdev_rx_handler_register 和 netdev_rx_handler_unregister
+	 * 来对rx_handler的设置进行管理
+	 *
+	 * bridge 实现就是通过设置 rx_handler 为 br_handler_frame 来
+	 * 接收包, 并对包进行处理。
+	 * ****************************************************/
 	rx_handler = rcu_dereference(skb->dev->rx_handler);
 	if (rx_handler) {
+		/* ********************************************
+		 * Q: 这儿为什么要送到上层？？？？？？？？
+		 * 
+		 * A: pt_prev 是延迟调用的 ptype->func()
+		 * ********************************************/
 		if (pt_prev) {
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 			pt_prev = NULL;
@@ -3985,6 +4041,13 @@ ncls:
 		}
 	}
 
+	/*****************************************************
+	 * 到skb到此处的时候，VLAN tag 理论上是应该被剥掉了，
+	 * 但是，如果包不是发给本机的，VLANtag 头不会被剥掉，
+	 * 在此处我们可以将这个包判定为发给其他HOST的。所以
+	 * 此处将 pkt_type 设为 PACKET_OTHERHOST
+	 *
+	 * ***************************************************/
 	if (unlikely(skb_vlan_tag_present(skb))) {
 		if (skb_vlan_tag_get_id(skb))
 			skb->pkt_type = PACKET_OTHERHOST;
@@ -3999,20 +4062,39 @@ ncls:
 
 	/* deliver only exact match when indicated */
 	if (likely(!deliver_exact)) {
+		/*****************************************************
+		 * 首先按照协议号传递到上层
+		 *
+		 * 这没什么问题
+		 * ***************************************************/
 		deliver_ptype_list_skb(skb, &pt_prev, orig_dev, type,
 				       &ptype_base[ntohs(type) &
 						   PTYPE_HASH_MASK]);
 	}
 
+	/*****************************************************
+	 * ptype_specific是注册的设备指定的协议链表
+	 * 如果注册了设备指定的协议，就将设备送到上层
+	 * **************************************************/
 	deliver_ptype_list_skb(skb, &pt_prev, orig_dev, type,
 			       &orig_dev->ptype_specific);
 
+
+	/*****************************************************
+	 * 如果skb设备在被改变了，再次把skb送到上层
+	 * **************************************************/
 	if (unlikely(skb->dev != orig_dev)) {
 		deliver_ptype_list_skb(skb, &pt_prev, orig_dev, type,
 				       &skb->dev->ptype_specific);
 	}
 
 	if (pt_prev) {
+		/************************************************
+		 * 处理上一次延迟的 deliver 到上层的动作
+		 *
+		 * pt_prev->func(xxx) 其实就是deliver_skb 内部的
+		 * 动作。
+		 * **********************************************/
 		if (unlikely(skb_orphan_frags(skb, GFP_ATOMIC)))
 			goto drop;
 		else
@@ -4868,6 +4950,7 @@ static int napi_poll(struct napi_struct *n, struct list_head *repoll)
 	void *have;
 	int work, weight;
 
+	/* 将这个元素从待处理包的链表中移除 */
 	list_del_init(&n->poll_list);
 
 	have = netpoll_poll_lock(n);
@@ -4934,6 +5017,14 @@ static void net_rx_action(struct softirq_action *h)
 	LIST_HEAD(repoll);
 
 	local_irq_disable();
+	/******************************************
+	 * 我们可以知道，这个链表是在 net_dev_init
+	 * 中初始化的。
+	 * list_splice_init 的作用就是把 poll_list
+	 * 链表合并到 list 中， 然后把 poll_list
+	 * 置空。
+	 * 从功能上看这个地方禁中断就很合理了
+	 * ***************************************/
 	list_splice_init(&sd->poll_list, &list);
 	local_irq_enable();
 
@@ -4941,12 +5032,26 @@ static void net_rx_action(struct softirq_action *h)
 		struct napi_struct *n;
 
 		if (list_empty(&list)) {
+			/*********************************
+			 * 如果链表中的元素处理完了，就
+			 * 退出循环。
+			 * 暂时不考虑 RPS 这一类的东东。
+			 * ******************************/
 			if (!sd_has_rps_ipi_waiting(sd) && list_empty(&repoll))
 				return;
 			break;
 		}
 
+		/***************************************************
+		 * 从链表中取出一个元素, 这个元素是一个 napi_struct
+		 * 类型, poll_list 就是 napi_struct 中的一个 链表
+		 * entry 成员， 通过 container_of 来获取宿主
+		 * napi_struct的指针并返回。
+		 * ************************************************/
 		n = list_first_entry(&list, struct napi_struct, poll_list);
+
+		/************************
+		 * */
 		budget -= napi_poll(n, &repoll);
 
 		/* If softirq window is exhausted then punt.
@@ -7833,18 +7938,30 @@ static int __init net_dev_init(void)
 {
 	int i, rc = -ENOMEM;
 
+	/* 只有在boot的时候才会调用这个函数 */
 	BUG_ON(!dev_boot_phase);
 
+	/*************************************
+	 * 一共注册四个proc:
+	 *		dev
+	 *		ptype
+	 *		softnet_stat
+	 *		dev_mcast
+	 ************************************/
 	if (dev_proc_init())
 		goto out;
 
 	if (netdev_kobject_init())
 		goto out;
 
+	/* ptype_all 用于AF_PACKET链路层帧嗅探 */
 	INIT_LIST_HEAD(&ptype_all);
+
+	/* ptype_base是个hash表，用于存放各种注册的协议 */
 	for (i = 0; i < PTYPE_HASH_SIZE; i++)
 		INIT_LIST_HEAD(&ptype_base[i]);
-
+	
+	/* 用于分流，offload翻译成分流（用于负载分流）*/
 	INIT_LIST_HEAD(&offload_base);
 
 	if (register_pernet_subsys(&netdev_net_ops))
@@ -7853,15 +7970,22 @@ static int __init net_dev_init(void)
 	/*
 	 *	Initialise the packet receive queues.
 	 */
-
 	for_each_possible_cpu(i) {
+		/********************************* 
+		 * 1. 初始化每个CPU的收包队列 
+		 * 2. 初始化包处理队列
+		 * 3. 初始化轮循队列
+		 * 4. 初始化发包队列
+		 * ******************************/
 		struct softnet_data *sd = &per_cpu(softnet_data, i);
 
 		skb_queue_head_init(&sd->input_pkt_queue);
 		skb_queue_head_init(&sd->process_queue);
 		INIT_LIST_HEAD(&sd->poll_list);
 		sd->output_queue_tailp = &sd->output_queue;
-#ifdef CONFIG_RPS
+
+#ifdef CONFIG_RPS 
+		//Receive Packet Steering (收包负载均衡)
 		sd->csd.func = rps_trigger_softirq;
 		sd->csd.info = sd;
 		sd->cpu = i;
@@ -7871,6 +7995,7 @@ static int __init net_dev_init(void)
 		sd->backlog.weight = weight_p;
 	}
 
+    /* 初始化完成 */
 	dev_boot_phase = 0;
 
 	/* The loopback device is special if any other network devices
@@ -7882,17 +8007,24 @@ static int __init net_dev_init(void)
 	 * is the first device that appears and the last network device
 	 * that disappears.
 	 */
+	/* 注册回环设备 */
 	if (register_pernet_device(&loopback_net_ops))
 		goto out;
-
+    
+	/* 注册默认设备回调函数 */
 	if (register_pernet_device(&default_device_ops))
 		goto out;
 
+	/* 注册RX/TX中断回调函数 */
 	open_softirq(NET_TX_SOFTIRQ, net_tx_action);
 	open_softirq(NET_RX_SOFTIRQ, net_rx_action);
-
+	
+    /* 暂时不关心这个 */
 	hotcpu_notifier(dev_cpu_callback, 0);
+
+    /* 路由子系统 */
 	dst_subsys_init();
+
 	rc = 0;
 out:
 	return rc;

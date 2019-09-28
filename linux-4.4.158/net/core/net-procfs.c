@@ -416,8 +416,23 @@ static struct pernet_operations __net_initdata dev_mc_net_ops = {
 
 int __init dev_proc_init(void)
 {
+	/* **********************************************************************
+	 * 创建三个 proc:
+	 *		1. dev           : 用于显示所有注册的net devices
+	 *		2. ptype         : 用于显示所有支持的三层协议， 如 ARP/IP/IPv6
+	 *		3. softnet_stat  : 用于显示每个 CPU 的流情况，一行代表一个CPU
+	 *		                   比较有用的是前两列，第一列是CPU处理的包数目，
+	 *		                   第二列是CPU队列满时drop掉的包数目。
+	 * *********************************************************************/
 	int ret = register_pernet_subsys(&dev_proc_ops);
-	if (!ret)
+	if (!ret){
+		/*********************************************************************
+		 * 创建一个 proc
+		 *		1. dev_mcast    : 显示系统中所有设备加入的所有多播组
+		 *		                  显示的内容如下:
+		 *						  ifindex/ifname/refcount/global_use/MC_hwaddr
+		 * ******************************************************************/
 		return register_pernet_subsys(&dev_mc_net_ops);
+	}
 	return ret;
 }

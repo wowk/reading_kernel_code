@@ -495,6 +495,19 @@ static inline void dst_set_expires(struct dst_entry *dst, int timeout)
 /* Output packet to network from transport.  */
 static inline int dst_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
+	/*********************************************
+	 * output 要么就是 ip_output , 
+	 * 要么就是 igmp_mc_init
+	 *
+	 * 至于在那边设置的，还需要找找 ???????????????
+	 *
+	 * 好像是在 skb_dst_alloc 中设定的默认 output
+	 *
+	 * 对于多播，实在 ip_mkroute_output
+	 *
+	 * 这两者都是在 ip_rcv_finish 的时候确定的，
+	 * 这一点和 input 是一样的。
+	 * *******************************************/
 	return skb_dst(skb)->output(net, sk, skb);
 }
 
