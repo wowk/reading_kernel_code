@@ -533,7 +533,7 @@ int xt_compat_calc_jump(u_int8_t af, unsigned int offset)
 {
 	struct compat_delta *tmp = xt[af].compat_tab;
 	int mid, left = 0, right = xt[af].cur - 1;
-
+    
 	while (left <= right) {
 		mid = (left + right) >> 1;
 		if (offset > tmp[mid].offset)
@@ -1510,6 +1510,19 @@ static const struct file_operations xt_target_ops = {
 struct nf_hook_ops *xt_hook_link(const struct xt_table *table, nf_hookfn *fn)
 {
 	unsigned int hook_mask = table->valid_hooks;
+    /********************************************
+     * hweight32 的操作就是计算 valid_hooks 中
+     * 的置位bit的个数
+     * 
+     * valid_hooks 是一个bit集合，每个位都表示
+     * 一个标准CHAIN（如INPUT/FORWARD/OUTPUT）
+     *
+     * 这样看来 valid_hooks 中置位bit的数目就
+     * 代表当前 table 中 的标准CHAIN的数目。
+     *
+     * valid_hooks 是一个32位的整型，这意味着
+     * 一个表中最多存在32个标准CHAIN
+     * *****************************************/
 	uint8_t i, num_hooks = hweight32(hook_mask);
 	uint8_t hooknum;
 	struct nf_hook_ops *ops;
@@ -1519,6 +1532,14 @@ struct nf_hook_ops *xt_hook_link(const struct xt_table *table, nf_hookfn *fn)
 	if (ops == NULL)
 		return ERR_PTR(-ENOMEM);
 
+    /********************************************************
+     * 将table中的所有CHAIN都转换为一个对应的 nf_hooks_ops
+     * 优先级也直接使用table的优先级
+     *
+     * 每个CHAIN的入口函数直接设为注册table时指定的入口函数
+     *
+     * 调用时，函数会区分是哪个CHAIN调用的．
+     * *****************************************************/
 	for (i = 0, hooknum = 0; i < num_hooks && hook_mask != 0;
 	     hook_mask >>= 1, ++hooknum) {
 		if (!(hook_mask & 1))
@@ -1530,6 +1551,10 @@ struct nf_hook_ops *xt_hook_link(const struct xt_table *table, nf_hookfn *fn)
 		++i;
 	}
 
+    /*******************************************************
+     * 将转换成 nf_hook_pos 的 CHAIN 注册到 hook_list 上
+     *
+     * *****************************************************/
 	ret = nf_register_hooks(ops, num_hooks);
 	if (ret < 0) {
 		kfree(ops);

@@ -24,11 +24,37 @@ MODULE_DESCRIPTION("iptables filter table");
 			    (1 << NF_INET_FORWARD) | \
 			    (1 << NF_INET_LOCAL_OUT))
 
+/*********************************************************************
+ *
+ * Q: 既然这是一个表的描述，那么entry存在什么地方 ？？？
+ *    存在 net.nf.hooks[proto][chain] 这个二维数组中 ？？？
+ *
+ *
+ * ******************************************************************/
+
 static const struct xt_table packet_filter = {
 	.name		= "filter",
+    /*****************************************************************
+     * 此处的valid_hooks是一个bit集合，用于存放当前表支持
+     * 的标准CHAIN的集合，如 FILTER_VALID_HOOKS 定义如下：
+     *  
+     *   #define FILTER_VALID_HOOKS ((1 << NF_BR_LOCAL_IN) | (1 << NF_BR_FORWARD) | (1 << NF_BR_LOCAL_OUT))
+     *
+     * 可以看出，filter 表支持 INPUT/FORWARD/OUTPUT 三个 CHAIN
+     * **************************************************************/
 	.valid_hooks	= FILTER_VALID_HOOKS,
+
 	.me		= THIS_MODULE,
+
+    /*****************************************************************
+     * 该表的L3协议类型
+     * **************************************************************/
 	.af		= NFPROTO_IPV4,
+
+    /****************************************************************
+     * 当前表的优先级，对于不同表中（如mangle/nat）的同名CHAIN，
+     * 使用这个优先级进行比较，值越小优先级越大
+     * *************************************************************/
 	.priority	= NF_IP_PRI_FILTER,
 };
 
@@ -36,6 +62,11 @@ static unsigned int
 iptable_filter_hook(void *priv, struct sk_buff *skb,
 		    const struct nf_hook_state *state)
 {
+    /*****************************************
+     * 如果是出口包，且不是ip包
+     * 或者当前是非法的ip包，
+     * 则直接放过，不进入iptable
+     * ***************************************/
 	if (state->hook == NF_INET_LOCAL_OUT &&
 	    (skb->len < sizeof(struct iphdr) ||
 	     ip_hdrlen(skb) < sizeof(struct iphdr)))

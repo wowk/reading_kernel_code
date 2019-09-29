@@ -324,6 +324,11 @@ ipt_do_table(struct sk_buff *skb,
 	IP_NF_ASSERT(table->valid_hooks & (1 << hook));
 	local_bh_disable();
 	addend = xt_write_recseq_begin();
+
+    /**********************************************
+     * struct xt_table_info 对象，里面包含了用户
+     * 添加的所有entry
+     * *******************************************/
 	private = table->private;
 	cpu        = smp_processor_id();
 	/*
@@ -356,6 +361,9 @@ ipt_do_table(struct sk_buff *skb,
 		struct xt_counters *counter;
 
 		IP_NF_ASSERT(e);
+        /**************************************************
+         * 这儿应该是标准的match动作
+         * ***********************************************/
 		if (!ip_packet_match(ip, indev, outdev,
 		    &e->ip, acpar.fragoff)) {
  no_match:
@@ -363,6 +371,20 @@ ipt_do_table(struct sk_buff *skb,
 			continue;
 		}
 
+        /**************************************************
+         * 这儿应该是模块的 match 动作, 可以指定多个
+         * 匹配模块，这地方是 foreach 循环，可以看出
+         * 是支持多个模块匹配的
+         *
+         * 从xt_ematch_foreach的实现来看，
+         * ipt_entry 中的 elems[0] 变长数组包含了
+         * xt_entry_match 和 xt_entry_target 两部分
+         * 从 e->elems[0] 到 e->target_offset 为止
+         * 这段空间存放的是 xt_match_entry 的数组
+         * e->target_offset 偏移处存放的是
+         * xt_match_target 对象。
+         *
+         * ***********************************************/
 		xt_ematch_foreach(ematch, e) {
 			acpar.match     = ematch->u.kernel.match;
 			acpar.matchinfo = ematch->data;
@@ -372,7 +394,10 @@ ipt_do_table(struct sk_buff *skb,
 
 		counter = xt_get_this_cpu_counter(&e->counters);
 		ADD_COUNTER(*counter, skb->len, 1);
-
+        
+        /***************************************************
+         * 匹配到 规则了, 接下来进行 target 动作
+         * *************************************************/
 		t = ipt_get_target(e);
 		IP_NF_ASSERT(t->u.kernel.target);
 
@@ -382,6 +407,20 @@ ipt_do_table(struct sk_buff *skb,
 			trace_packet(state->net, skb, hook, state->in,
 				     state->out, table->name, private, e);
 #endif
+
+        /**************************************************
+         * target 这一段着实有点难以看明白，
+         *
+         * 稍后详细分析
+         *
+         * jumpstack 这个机制需要详细研究下
+         *
+         * 但是到目前为止，netfilter 的基本框架已经大概
+         * 明白了，包是如何在 iptables/ip6tables 中经过
+         * 的这个过程比较清晰
+         *
+         * 后续还有conntrack相关的内容
+         * ************************************************/
 		/* Standard target? */
 		if (!t->u.kernel.target->target) {
 			int v;
