@@ -1832,6 +1832,13 @@ static inline void deliver_ptype_list_skb(struct sk_buff *skb,
 	list_for_each_entry_rcu(ptype, ptype_list, list) {
 		if (ptype->type != type)
 			continue;
+		/**************************************************
+		 * 只要 type 相同，链上的所有注册的ptype协议处理
+		 * 回调函数（如 ip_rcv, packet_rcv) 都会得到
+		 * skb的一份副本进行处理，而不是找到一个匹配的
+		 * 协议处理函数就结束，这点需要注意
+		 *
+		 * ************************************************/
 		if (pt_prev)
 			deliver_skb(skb, pt_prev, orig_dev);
 		pt_prev = ptype;
