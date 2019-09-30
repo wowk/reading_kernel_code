@@ -351,6 +351,16 @@ nf_nat_ipv4_in(void *priv, struct sk_buff *skb,
 	__be32 daddr = ip_hdr(skb)->daddr;
 
 	ret = nf_nat_ipv4_fn(priv, skb, state, do_chain);
+
+    /************************************************
+     * 如果NAT表改变了skb的目的地址，则将原来的
+     * dst entry 引用计数减1, 如果没有其他引用，则
+     * 释放dst entry。
+     *
+     * 引用计数的位置：
+     *     skb->_refdst->_refcnt
+     *
+     * *********************************************/
 	if (ret != NF_DROP && ret != NF_STOLEN &&
 	    daddr != ip_hdr(skb)->daddr)
 		skb_dst_drop(skb);

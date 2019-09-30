@@ -93,9 +93,24 @@ int nf_register_net_hook(struct net *net, const struct nf_hook_ops *reg)
 	if (!entry)
 		return -ENOMEM;
 
+    /*******************************************************************
+     * 创建一个 nf_hooks_entry, 
+     * 然后 orig_ops 指向之前创建的 nf_hook_ops 对象
+     *     orig_ops 指向的是在 链表 nf_hook_list 中的对象
+     *
+     * 然后 ops      复制了之前创建的 nf_hook_ops 对象
+     *     复制的这个对象会加入到二维链表数组 hooks 的对应元素链表中
+     *
+     * 这一点看其来有点重复了，但是，nf_hook_list 是维护用途，
+     * hooks中是为了匹配用途
+     *
+     * ***************************************************************/
 	entry->orig_ops	= reg;
 	entry->ops	= *reg;
 
+    /******************************************************************
+     * 根据 proto 和 chain 找出 hooks 二维数组中对应的 hook_list
+     * ***************************************************************/
 	hook_list = nf_find_hook_list(net, reg);
 	if (!hook_list) {
 		kfree(entry);
@@ -103,6 +118,10 @@ int nf_register_net_hook(struct net *net, const struct nf_hook_ops *reg)
 	}
 
 	mutex_lock(&nf_hook_mutex);
+    /******************************************************************
+     * 按照优先级值升序的方式将entry插入到hook_list中，优先级值越小
+     * 表示优先级越高，越会先得到执行。
+     * ****************************************************************/
 	list_for_each_entry(elem, hook_list, list) {
 		if (reg->priority < elem->priority)
 			break;
@@ -199,6 +218,16 @@ int nf_register_hook(struct nf_hook_ops *reg)
 		if (ret && ret != -ENOENT)
 			goto rollback;
 	}
+    /******************************************************************
+     * nf_register_net_hook 会创建一个 nf_hook_entry 将 nf_hook_ops 复制
+     * 一份放入到entry的 ops 成员中，并让其orig_ops 成员指向我们当前的
+     * nf_hook_ops.
+     *
+     * 当前的 nf_hook_ops 会加入到链表nf_hook_list中
+     *
+     * 也就是说 nf_hook_ops 会同时存在与 nf_hook_list 和 hooks[][] 中
+     *
+     * ****************************************************************/
 	list_add_tail(&reg->list, &nf_hook_list);
 	rtnl_unlock();
 

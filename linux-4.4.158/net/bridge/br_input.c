@@ -195,15 +195,39 @@ int br_handle_frame_finish(struct net *net, struct sock *sk, struct sk_buff *skb
 		skb = NULL;
 	}
 
+    /**********************************************************
+     * skb != NULL 表示这个包不是local的，则调用 br_forward
+     * 进行转发
+     * ********************************************************/
 	if (skb) {
 		if (dst) {
 			dst->used = jiffies;
+            /**************************************************
+             * br_forward 不会将包送到L3，这届 dev_xmit_skb 就
+             * 把包转发出去了
+             * ***********************************************/
 			br_forward(dst->dst, skb, skb2);
 		} else
 			br_flood_forward(br, skb, skb2, unicast);
 	}
 
+    /***********************************************************
+     * 如果 skb2 != NULL, 表示这个包是 local 的或是 multicast的
+     * 需要向协议栈上层传递
+     * ********************************************************/
 	if (skb2)
+        /**************************************************
+         * 向上传送的过程其实非常简单，就是重新走一遍协议栈
+         *
+         * 重新向上传递前会把  skb->dev 改当前 bridge
+         * 表示这个包是bridge收上来的
+         *
+         *
+         * 需要注意的是，向上传递前还会经过 NF_BRIDGE table
+         * 如果当前 br_netfilter 模块加载了，则包会经过
+         * NF_BRIDGE 表中的规则
+         *
+         * ************************************************/
 		return br_pass_frame_up(skb2);
 
 out:
@@ -249,6 +273,21 @@ rx_handler_result_t br_handle_frame(struct sk_buff **pskb)
 
 	p = br_port_get_rcu(skb->dev);
 
+    /****************************************************
+     * 使用 unlikely 在Router场景中可能是不太好
+     * 因为 Router 的LAN端发的包的目的地址都是
+     * bridge的地址，毕竟是网关嘛
+     *
+     * xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+     * Update:
+     *
+     * 上面的叙述是错误的，这是由于不理解什么是 
+     * link locl地址导致的
+     *      link local reserved addr (01:80:c2:00:00:0X)
+     * 
+     * 这才是link local 地址
+     *
+     * *************************************************/
 	if (unlikely(is_link_local_ether_addr(dest))) {
 		u16 fwd_mask = p->br->group_fwd_mask_required;
 
@@ -311,6 +350,9 @@ forward:
 		if (ether_addr_equal(p->br->dev->dev_addr, dest))
 			skb->pkt_type = PACKET_HOST;
 
+        /******************************************************
+         * 如果 br_netfilter 被插入，则可能会有规则
+         * ****************************************************/
 		NF_HOOK(NFPROTO_BRIDGE, NF_BR_PRE_ROUTING,
 			dev_net(skb->dev), NULL, skb, skb->dev, NULL,
 			br_handle_frame_finish);
@@ -319,5 +361,10 @@ forward:
 drop:
 		kfree_skb(skb);
 	}
+
+    /********************************************
+     * 原来的skb不会再从协议栈L2往上继续送，
+     * bridge 会接手这个包
+     * ******************************************/
 	return RX_HANDLER_CONSUMED;
 }

@@ -212,6 +212,11 @@ static inline int nf_hook_thresh(u_int8_t pf, unsigned int hook,
 	 * PRETOUING，INPUT，OUTPUT 等 CHAIN 都是在同一个链表中的，怎么区分
 	 * 在 nf_hook_slow 中讲述
 	 *
+     *
+     * tips:
+     * 对于 hook_list 链表，其每个元素的类型都是 struct nf_hook_entry
+     * 这一点需要注意，
+     * 相关的数据结构 nf_hook_ops, 通过这个类型结构可以新增 nf_hook_entry
 	 * ***************************************************************************/
 	struct list_head *hook_list = &net->nf.hooks[pf][hook];
 

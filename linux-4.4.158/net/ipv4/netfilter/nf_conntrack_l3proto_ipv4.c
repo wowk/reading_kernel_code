@@ -469,6 +469,29 @@ static int __init nf_conntrack_l3proto_ipv4_init(void)
 		goto cleanup_sockopt;
 	}
 
+    /*************************************************************
+     * ipv4 conntrack 机制也是通过各个CHAIN来实现的，
+     * conntrack 模块加载是会添加几条优先级最高的规则，
+     * 来供 conntrack 模块使用。
+     *
+     * Q: 为什么用 iptables 工具显示不了 ？
+     *
+     * 此处添加的默认入口hook会调用下面注册的 L3/L3.5/L4 协议
+     * 函数进行进一步的处理。
+     * 具体的流程需要继续分析
+     *
+     *
+     *
+     *   static struct nf_conntrack_l4proto __rcu **nf_ct_protos[PF_MAX] __read_mostly;
+     *   struct nf_conntrack_l3proto __rcu *nf_ct_l3protos[AF_MAX] __read_mostly;
+     *
+     *   如下注册的L3/L3.5/L4协议函数，都是直接加在数组中的
+     *   L3 放在 nf_ct_l3protos[] 中，
+     *   L4 放在 nf_ct_protos[] 中
+     *   L3.5 其实就是L4，所以也放在L4 中
+     *
+     * **********************************************************/
+
 	ret = nf_register_hooks(ipv4_conntrack_ops,
 				ARRAY_SIZE(ipv4_conntrack_ops));
 	if (ret < 0) {
@@ -476,24 +499,40 @@ static int __init nf_conntrack_l3proto_ipv4_init(void)
 		goto cleanup_pernet;
 	}
 
+    /************************************************************
+     * conntrack模块L4的tcp协议处理和响应
+     * 
+     * *********************************************************/
 	ret = nf_ct_l4proto_register(&nf_conntrack_l4proto_tcp4);
 	if (ret < 0) {
 		pr_err("nf_conntrack_ipv4: can't register tcp4 proto.\n");
 		goto cleanup_hooks;
 	}
 
+    /************************************************************
+     * conntrack模块L4的udp协议处理和响应
+     * 
+     * *********************************************************/
 	ret = nf_ct_l4proto_register(&nf_conntrack_l4proto_udp4);
 	if (ret < 0) {
 		pr_err("nf_conntrack_ipv4: can't register udp4 proto.\n");
 		goto cleanup_tcp4;
 	}
 
+    /************************************************************
+     * conntrack模块L3.5的icmp协议处理和响应
+     * 
+     * *********************************************************/
 	ret = nf_ct_l4proto_register(&nf_conntrack_l4proto_icmp);
 	if (ret < 0) {
 		pr_err("nf_conntrack_ipv4: can't register icmpv4 proto.\n");
 		goto cleanup_udp4;
 	}
 
+    /************************************************************
+     * conntrack模块L3的ipv4协议处理和响应
+     * 
+     * *********************************************************/
 	ret = nf_ct_l3proto_register(&nf_conntrack_l3proto_ipv4);
 	if (ret < 0) {
 		pr_err("nf_conntrack_ipv4: can't register ipv4 proto.\n");
