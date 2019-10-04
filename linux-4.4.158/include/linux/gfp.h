@@ -271,6 +271,12 @@ static inline int gfpflags_to_migratetype(const gfp_t gfp_flags)
 
 static inline bool gfpflags_allow_blocking(const gfp_t gfp_flags)
 {
+    /************************************************************
+     * __GFP_DIRECT_RECLAIM 是组成 GFP_KERNEL 这类标志的一个bit位，
+     *
+     * GFP_KERNEL 这种其实就是一个bitset其内部的bit位代表着这个
+     * 标识的属性
+     * *********************************************************/
 	return (bool __force)(gfp_flags & __GFP_DIRECT_RECLAIM);
 }
 

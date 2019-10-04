@@ -3895,6 +3895,13 @@ static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
 
 	orig_dev = skb->dev;
 
+    /*******************************************
+     * network_header
+     * transport header
+     *
+     * 上述两个都是到 skb->header 的偏移值
+     *
+     * ****************************************/
 	skb_reset_network_header(skb);
 	if (!skb_transport_header_was_set(skb))
 		skb_reset_transport_header(skb);
@@ -3902,18 +3909,32 @@ static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
 
 
 	/***************************************************************
+	 * pt_prev 是一种优化措施
 	 *
-	 *
-	 *
-	 *
-	 *
-	 *
-	 *
+     * 在遍历 ptype_all 或者 ptype_base[type] 这样的链表时，遍历到
+     * 的元素不会立即调用 ptype->func(skb), 而是先将其赋值给 pt_prev
+     *             pt_prev = <ptype element>
+     *
+     * 然后继续遍历动作，当遍历到下一个元素后会先执行
+     *             deliver_skb(pt_prev) (内部就是调用 pt_prev->func(skb))
+     * 然后执行  
+     *             pt_prev = <current ptype element>
+     *
+     * 
+     * 也就是相当与将 ptype->func(skb) 延迟一会调用
+     *
+     * 在遍历结束后，会执行最后一个延迟的 ptype->func(skb).
 	 *
 	 * *************************************************************/
 	pt_prev = NULL;
 
 another_round:
+    /*****************************************************
+     * 设置skb的入口设备 index，
+     *
+     * 物理设备收到的包送到桥接或隧道interface时，会
+     * skb会重如协议栈，此时 dev 会被更新成新的interface.
+     * **************************************************/
 	skb->skb_iif = skb->dev->ifindex;
 
 	__this_cpu_inc(softnet_data.processed);
@@ -3922,8 +3943,8 @@ another_round:
 	 * 此处的protol是 二层头中包含的三层协议号,
 	 * 也可能是 VLAN 头的协议号
 	 * *********************************************/
-	if (skb->protocol == cpu_to_be16(ETH_P_8021Q) ||
-	    skb->protocol == cpu_to_be16(ETH_P_8021AD)) {
+	if (skb->protocol == cpu_to_be16(ETH_P_8021Q) || //0x8100
+	    skb->protocol == cpu_to_be16(ETH_P_8021AD)) {//0x88A8
 		/* **********************************************************
 		 * 脱掉VLAN tag
 		 * 注意，如果当前skb不是以太网帧，tag是不会被脱掉的
@@ -3932,6 +3953,10 @@ another_round:
 		 * *********************************************************/
 		skb = skb_vlan_untag(skb);
 		if (unlikely(!skb))
+            /*********************************
+             * skb 无效或不合法，则不会继续处理
+             * 这个包直接丢弃
+             * ******************************/
 			goto out;
 	}
 

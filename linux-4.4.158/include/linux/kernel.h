@@ -186,6 +186,18 @@ extern int _cond_resched(void);
  * be bitten later when the calling function happens to sleep when it is not
  * supposed to.
  */
+/*******************************************************
+ * might_sleep 是一个调试工具，用于判断某段Code在莫个
+ * 不该睡眠的地方是否真的不会睡眠
+ *
+ * 当
+ *     CONFIG_DEBUG_ATOMIC_SLEEP
+ * 没有定义，则这是一个空函数。
+ *
+ * 如果定义了，但是在此处睡眠了，就会打印出堆栈回溯信息，
+ * 指示出其睡眠了。
+ * ****************************************************/
+
 # define might_sleep() \
 	do { __might_sleep(__FILE__, __LINE__, 0); might_resched(); } while (0)
 # define sched_annotate_sleep()	(current->task_state_change = 0)

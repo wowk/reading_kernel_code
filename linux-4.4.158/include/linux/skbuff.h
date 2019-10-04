@@ -1297,6 +1297,10 @@ static inline int skb_shared(const struct sk_buff *skb)
  *	@skb: buffer to check
  *	@pri: priority for memory allocation
  *
+ *  
+ *
+ *
+ *
  *	If the buffer is shared the buffer is cloned and the old copy
  *	drops a reference. A new clone with a single reference is returned.
  *	If the buffer is not shared the original buffer is returned. When
@@ -1307,14 +1311,50 @@ static inline int skb_shared(const struct sk_buff *skb)
  */
 static inline struct sk_buff *skb_share_check(struct sk_buff *skb, gfp_t pri)
 {
+    /*******************************************************
+     * might_sleep 是一个调试工具，用于判断某段Code在莫个
+     * 不该睡眠的地方是否真的不会睡眠
+     *
+     * 当
+     *     CONFIG_DEBUG_ATOMIC_SLEEP
+     * 没有定义，则这是一个空函数。
+     *
+     * 如果定义了，但是在此处睡眠了，就会打印出堆栈回溯信息，
+     * 指示出其睡眠了。
+     *
+     * might_sleep_if(cond) 只有在 cond 为 TRUE 的时候才工作
+     * 
+     *
+     * gfpflags_allow_blocking 就是用于检查 gfp 标志是否允许睡眠
+     * ****************************************************/
 	might_sleep_if(gfpflags_allow_blocking(pri));
 	if (skb_shared(skb)) {
+        /*********************************
+         * 如果是共享的skb，则clone一份，
+         * ******************************/
 		struct sk_buff *nskb = skb_clone(skb, pri);
 
-		if (likely(nskb))
+		if (likely(nskb)){
+            /*********************************
+             * 如果 clone 成功，
+             * 
+             * 则使用 consume_skb 将原来的 skb
+             * 的引用计数减1 
+             *     传到某一层的时候, 
+             *     会先增加skb的引用
+             *     计数，现在clone一份后要先放弃
+             *     原 skb 的所有权，其方法就是
+             *     将原 skb 的引用计数减 1.
+             *
+             * ******************************/
 			consume_skb(skb);
-		else
+        }else{
+            /*********************************
+             * 和 consume_skb 功能类似，只是
+             * 在trace统计上有所区别
+             * ******************************/
 			kfree_skb(skb);
+        }
 		skb = nskb;
 	}
 	return skb;
