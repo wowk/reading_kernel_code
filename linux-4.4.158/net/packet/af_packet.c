@@ -3140,6 +3140,10 @@ static int packet_create(struct net *net, struct socket *sock, int protocol,
 	po->rollover = NULL;
 	po->prot_hook.func = packet_rcv;
 
+	/******************************************
+	 * 从这里可以看出 spkt 就是 SOCKET_PACKET
+	 * 的缩写
+	 * ***************************************/
 	if (sock->type == SOCK_PACKET)
 		po->prot_hook.func = packet_rcv_spkt;
 
@@ -3147,6 +3151,25 @@ static int packet_create(struct net *net, struct socket *sock, int protocol,
 
 	if (proto) {
 		po->prot_hook.type = proto;
+		/*****************************************************
+		 * 上述将 hook->func 设为 packet_rcv, 此时 hook->type
+		 * 是协议类型（如ETH_P_IP），__register_prot_hook 将其
+		 * 注册到 ptype_base[hook->type] 类型的链表上，所有
+		 * 收到的 hook->type 类型的包会传递给链表中的每个处理
+		 * 函数来处理，加入我们创建了如下socket：
+		 *
+		 *      int fd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_IP));
+		 *
+		 * 这样的函数会挂到 ptype_base[ETH_P_IP] 这个链上，
+		 * 处理函数是 packet_rcv
+		 *
+		 * 而 ETH_P_IP 在协议栈初始化的时候就已经注册了处理函数
+		 * ip_rcv
+		 *
+		 * 则收到的 ETH_P_IP 类型的 skb 会分别传递给 
+		 * packet_rcv 和 ip_rcv 处理，这一点需要注意
+		 *
+		 * ***************************************************/
 		__register_prot_hook(sk);
 	}
 
