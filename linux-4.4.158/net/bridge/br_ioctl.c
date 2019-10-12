@@ -347,6 +347,18 @@ static int old_deviceless(struct net *net, void __user *uarg)
 	return -EOPNOTSUPP;
 }
 
+
+/****************************************************
+ *
+ * Bridge ioctl 接口
+ *
+ * 该函数会赋值给函数指针 br_ioctl_hook
+ * 
+ * 这个函数指针是在linux/net/socket.c中定义的，会在
+ *
+ * sock_ioctl中调用的。
+ *
+ * *************************************************/
 int br_ioctl_deviceless_stub(struct net *net, unsigned int cmd, void __user *uarg)
 {
 	switch (cmd) {

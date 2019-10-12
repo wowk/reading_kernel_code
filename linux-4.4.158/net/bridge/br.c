@@ -213,7 +213,10 @@ static int __init br_init(void)
 	if (err)
 		goto err_out2;
 
-    /* 注册网络设备通知处函数，当网络设备发生事件时，这个函数会被调用 */
+    /* **************************************************
+     * 注册网络设备通知处函数，当网络设备发生事件时，这个
+     * 函数会被调用
+     * *************************************************/
 	err = register_netdevice_notifier(&br_device_notifier);
 	if (err)
 		goto err_out3;
@@ -227,7 +230,13 @@ static int __init br_init(void)
 	err = br_netlink_init();
 	if (err)
 		goto err_out5;
-
+    
+    /************************************************
+     * 初始化 br_ioctl_hook 函数指针，在sock_ioctl中
+     * 会被调用
+     *
+     * 实现了 Bridge 的 ioctl 接口
+     * *********************************************/
 	brioctl_set(br_ioctl_deviceless_stub);
 
 #if IS_ENABLED(CONFIG_ATM_LANE)

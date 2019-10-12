@@ -366,11 +366,31 @@ void br_dev_setup(struct net_device *dev)
 {
 	struct net_bridge *br = netdev_priv(dev);
 
+    /*************************************
+     * 随机生成一个 hwaddr
+     * **********************************/
 	eth_hw_addr_random(dev);
+
+    /************************************
+     * 初始化L2发包是header构造接口
+     * **********************************/
 	ether_setup(dev);
 
+    /************************************
+     * br_netdev_ops 囊括了，对bridge
+     * net_device 操作的方方面面
+     * **********************************/
 	dev->netdev_ops = &br_netdev_ops;
-	dev->destructor = br_dev_free;
+	
+    /************************************
+     * bridge 设备的析构函数
+     * 释放设备的时候会调用
+     * **********************************/
+    dev->destructor = br_dev_free;
+    
+    /************************************
+     * 实现 ETHTOOL 操作接口
+     * **********************************/
 	dev->ethtool_ops = &br_ethtool_ops;
 	SET_NETDEV_DEVTYPE(dev, &br_type);
 	dev->priv_flags = IFF_EBRIDGE | IFF_NO_QUEUE;
@@ -391,6 +411,9 @@ void br_dev_setup(struct net_device *dev)
 
 	ether_addr_copy(br->group_addr, eth_reserved_addr_base);
 
+    /*************************************************
+     * 默认 disable STP
+     * ***********************************************/
 	br->stp_enabled = BR_NO_STP;
 	br->group_fwd_mask = BR_GROUPFWD_DEFAULT;
 	br->group_fwd_mask_required = BR_GROUPFWD_DEFAULT;

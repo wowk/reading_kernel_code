@@ -137,10 +137,18 @@ int br_handle_frame_finish(struct net *net, struct sock *sk, struct sk_buff *skb
 	struct sk_buff *skb2;
 	bool unicast = true;
 	u16 vid = 0;
-
+    
+    /*************************************
+     * 如果当前 brport 是 DISABLED 状态
+     * 则没有必要再进行处理了，反正上层
+     * 也不会收，直接丢弃就行了
+     * ***********************************/
 	if (!p || p->state == BR_STATE_DISABLED)
 		goto drop;
 
+    /*************************************
+     *
+     * ***********************************/
 	if (!br_allowed_ingress(p->br, nbp_vlan_group_rcu(p), skb, &vid))
 		goto out;
 
@@ -336,7 +344,15 @@ rx_handler_result_t br_handle_frame(struct sk_buff **pskb)
 
 forward:
 	switch (p->state) {
+    /********************************************
+     * 看看当前的 Bridge Port 是不是 Forwarding
+     * 
+     * *****************************************/
 	case BR_STATE_FORWARDING:
+        /**************************************
+         * FIXME
+         * BROUTE 功能，暂时不关心
+         * ************************************/
 		rhook = rcu_dereference(br_should_route_hook);
 		if (rhook) {
 			if ((*rhook)(skb)) {
@@ -347,11 +363,18 @@ forward:
 		}
 		/* fall through */
 	case BR_STATE_LEARNING:
+        /**************************************
+         * 如果目的地址是当前port，则设置
+         * pkt_type == PACKET_HOST
+         * ************************************/
 		if (ether_addr_equal(p->br->dev->dev_addr, dest))
 			skb->pkt_type = PACKET_HOST;
 
         /******************************************************
          * 如果 br_netfilter 被插入，则可能会有规则
+         * 在走过 netfilter 后， 调用 
+         *          br_handle_fram_finish
+         * 做进一步的处理
          * ****************************************************/
 		NF_HOOK(NFPROTO_BRIDGE, NF_BR_PRE_ROUTING,
 			dev_net(skb->dev), NULL, skb, skb->dev, NULL,

@@ -343,11 +343,20 @@ static struct net_bridge_port *new_nbp(struct net_bridge *br,
 	return p;
 }
 
+
+/*****************************************************
+ * 创建一个 Bridge 设备
+ * ***************************************************/
 int br_add_bridge(struct net *net, const char *name)
 {
 	struct net_device *dev;
 	int res;
 
+    /******************************************************
+     * 首先申请一个 设备对象
+     *
+     * 并调用 br_dev_setup 初始化这个设备
+     * ***************************************************/
 	dev = alloc_netdev(sizeof(struct net_bridge), name, NET_NAME_UNKNOWN,
 			   br_dev_setup);
 
@@ -356,7 +365,10 @@ int br_add_bridge(struct net *net, const char *name)
 
 	dev_net_set(dev, net);
 	dev->rtnl_link_ops = &br_link_ops;
-
+    
+    /**********************************
+     * 注册该设备
+     * *******************************/
 	res = register_netdev(dev);
 	if (res)
 		free_netdev(dev);
@@ -399,6 +411,9 @@ int br_min_mtu(const struct net_bridge *br)
 	ASSERT_RTNL();
 
 	if (list_empty(&br->port_list))
+        /*********************
+         * 默认MTU 1500
+         * ******************/
 		mtu = ETH_DATA_LEN;
 	else {
 		list_for_each_entry(p, &br->port_list, list) {
@@ -434,6 +449,14 @@ netdev_features_t br_features_recompute(struct net_bridge *br,
 }
 
 /* called with RTNL */
+/*****************************************************************
+ *
+ * Bridge 实际上不会其什么作用，除非往 Bridge 加入 interface，
+ *
+ * 此处就是用于向 Bridge 加入netdevice的接口，这个函数是有用户
+ * 程序通过 ioctl 或 netlink 接口来调用的。
+ *
+ * ***************************************************************/
 int br_add_if(struct net_bridge *br, struct net_device *dev)
 {
 	struct net_bridge_port *p;
@@ -452,28 +475,57 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	    netdev_uses_dsa(dev))
 		return -EINVAL;
 
-	/* No bridging of bridges */
+	/* **************************************************
+     * No bridging of bridges 
+     *
+     * Bridge 的 slave 设备不能是另一个 bridge
+     *
+     * **************************************************/
 	if (dev->netdev_ops->ndo_start_xmit == br_dev_xmit)
 		return -ELOOP;
 
-	/* Device has master upper dev */
+	/* **************************************************
+     *
+     * Device has master upper dev 
+     *
+     * 如果一个设备已经属于一个bridge了，就不能再加入
+     * 其他 bridge 了
+     *
+     * **************************************************/
 	if (netdev_master_upper_dev_get(dev))
 		return -EBUSY;
 
-	/* No bridging devices that dislike that (e.g. wireless) */
+	/* ******************************************************
+     * 如果一个 netdevice 了，则一个设备就不能加入bridge
+     * No bridging devices that dislike that (e.g. wireless) 
+     * *****************************************************/
 	if (dev->priv_flags & IFF_DONT_BRIDGE)
 		return -EOPNOTSUPP;
 
+    /*******************************************************
+     * 创建一个 net_bridge_port，将这个 port 加入 bridge
+     * ****************************************************/
 	p = new_nbp(br, dev);
 	if (IS_ERR(p))
 		return PTR_ERR(p);
 
+    /*******************************************************
+     * 设备现在加入了bridge，就发送一个JOIN通知，通知链上
+     * 注册的回调函数会被调用
+     * ****************************************************/
 	call_netdevice_notifiers(NETDEV_JOIN, dev);
 
+    /******************************************************
+     * 添加 allmulti flag，
+     * Bridge 设备默认允许所有的多播包通过 ？
+     * ****************************************************/
 	err = dev_set_allmulti(dev, 1);
 	if (err)
 		goto put_back;
-
+    
+    /******************************************************
+     * 在 sysfs 中添加相对应的项，可以对 bridge port进行配置
+     * ****************************************************/
 	err = kobject_init_and_add(&p->kobj, &brport_ktype, &(dev->dev.kobj),
 				   SYSFS_BRIDGE_PORT_ATTR);
 	if (err)
@@ -483,22 +535,62 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	if (err)
 		goto err2;
 
+    /******************************************************
+     * FIXME:
+     *
+     * netpoll 是什么玩意儿 ？
+     *
+     * ***************************************************/
 	err = br_netpoll_enable(p);
 	if (err)
 		goto err3;
 
+    /******************************************************
+     * 都设置好以后就设置 slave net_device 设备的 rx_handler
+     * 
+     * netif_receive_skb_core 中会去通过 rx_handler 将
+     * slave net_device 上收到的 skb 传递给 bridge 去处理，
+     *
+     * 这个函数默认就是  br_handle_frame
+     * ****************************************************/
 	err = netdev_rx_handler_register(dev, br_handle_frame, p);
 	if (err)
 		goto err4;
 
+    /******************************************************
+     * 可以通过这个 priv_flags 来确定一个 net_device 是否
+     * 是 bridge 的 slave。
+     *
+     * 还有一个 priv_flags 是 IFF_BRIDGE，可以通过这个标志
+     * 来确定一个 net_device 是否是 Bridge
+     * ****************************************************/
 	dev->priv_flags |= IFF_BRIDGE_PORT;
 
+    /******************************************************
+     * 设置 bridge 为此 dev 的上层设备， dev 属于该bridge
+     * ***************************************************/
 	err = netdev_master_upper_dev_link(dev, br->dev);
 	if (err)
 		goto err5;
 
+
+    /******************************************************
+     * LRO（Large Receive Offload）
+     *
+     * 在网卡驱动中将收到的多个 TCP 组合成一个大的 TCP 包，
+     * 然后送给上层处理，这会减轻网络协议栈的处理负担，这个
+     * 功能需要驱动程序支持
+     *
+     * 对于网桥设备，一般都是对包进行L2转发，而不用送到上层
+     * 协议栈进行处理，所以不用 Enable 这个功能。
+     * ***************************************************/
 	dev_disable_lro(dev);
 
+
+    /*****************************************************
+     * 将这个设备加入到 Bridge 的 port list,
+     * 并更新 bridge 的 port 数量
+     * ***************************************************/
 	list_add_rcu(&p->list, &br->port_list);
 
 	nbp_update_port_count(br);
@@ -508,6 +600,10 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	if (br->dev->needed_headroom < dev->needed_headroom)
 		br->dev->needed_headroom = dev->needed_headroom;
 
+    /*****************************************************
+     * 将此 net_device 的 地址作为 local entry 加入转发表
+     * 发往设备 MAC 的包会送给制定的 device 处理
+     * **************************************************/
 	if (br_fdb_insert(br, p, dev->dev_addr, 0))
 		netdev_err(dev, "failed insert local address bridge forwarding table\n");
 
@@ -520,18 +616,34 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	spin_lock_bh(&br->lock);
 	changed_addr = br_stp_recalculate_bridge_id(br);
 
+    /************************************************
+     * 如果网桥设备是 Link On 状态，则对 Port 
+     * 启动 STP
+     * **********************************************/
 	if (netif_running(dev) && netif_oper_up(dev) &&
 	    (br->dev->flags & IFF_UP))
 		br_stp_enable_port(p);
 	spin_unlock_bh(&br->lock);
-
+    
+    /************************************************
+     * 广播一个 netlink 消息，告诉大家一个新的
+     * Bridge Port 创建好了
+     * *********************************************/
 	br_ifinfo_notify(RTM_NEWLINK, p);
 
 	if (changed_addr)
 		call_netdevice_notifiers(NETDEV_CHANGEADDR, br->dev);
 
+    /***********************************************
+     * MTU 取所有Port中最小的一个 ？？？
+     *
+     * ADD: 还确实是这么实现的。。。
+     * *********************************************/
 	dev_set_mtu(br->dev, br_min_mtu(br));
 
+    /***********************************************
+     * UEVENT 也掺和进来了 ？
+     * *********************************************/
 	kobject_uevent(&p->kobj, KOBJ_ADD);
 
 	return 0;
@@ -570,12 +682,20 @@ int br_del_if(struct net_bridge *br, struct net_device *dev)
 	if (!p || p->br != br)
 		return -EINVAL;
 
-	/* Since more than one interface can be attached to a bridge,
+	/* **********************************************************
+     * Since more than one interface can be attached to a bridge,
 	 * there still maybe an alternate path for netconsole to use;
 	 * therefore there is no reason for a NETDEV_RELEASE event.
-	 */
-	del_nbp(p);
+     *
+     * 删除 bridge port
+	 * **********************************************************/
+    
+    del_nbp(p);
 
+    /************************************************************
+     * 删除完以后跟新下 MTU， MTU依然是剩余 Slave Port 中 MTU
+     * 最小的那个
+     * **********************************************************/
 	dev_set_mtu(br->dev, br_min_mtu(br));
 
 	spin_lock_bh(&br->lock);
