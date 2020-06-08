@@ -2846,6 +2846,11 @@ static int req_prot_init(const struct proto *prot)
 int proto_register(struct proto *prot, int alloc_slab)
 {
 	if (alloc_slab) {
+        /********************************************
+         * FIXME:
+         *
+         * What is SLAB and How does it work ?
+         * ******************************************/
 		prot->slab = kmem_cache_create(prot->name, prot->obj_size, 0,
 					SLAB_HWCACHE_ALIGN | prot->slab_flags,
 					NULL);
@@ -2877,8 +2882,12 @@ int proto_register(struct proto *prot, int alloc_slab)
 	}
 
 	mutex_lock(&proto_list_mutex);
+    /*******************************************
+     * 将 prot 加入 proto_list 链表
+     * ****************************************/
 	list_add(&prot->node, &proto_list);
-	assign_proto_idx(prot);
+
+    assign_proto_idx(prot);
 	mutex_unlock(&proto_list_mutex);
 	return 0;
 

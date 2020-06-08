@@ -1704,29 +1704,42 @@ static int __init inet_init(void)
 	struct inet_protosw *q;
 	struct list_head *r;
 	int rc = -EINVAL;
-
+    
+    //确保 skb->cb[] 在sk_buff的末尾
 	sock_skb_cb_check_size(sizeof(struct inet_skb_parm));
 
+    /***********************************
+     * 注册 TCP 协议
+     * *********************************/
 	rc = proto_register(&tcp_prot, 1);
 	if (rc)
 		goto out;
 
+    /***********************************
+     * 注册 UDP 协议
+     * *********************************/
 	rc = proto_register(&udp_prot, 1);
 	if (rc)
 		goto out_unregister_tcp_proto;
 
+    /***********************************
+     * 注册 RAW 协议
+     * *********************************/
 	rc = proto_register(&raw_prot, 1);
 	if (rc)
 		goto out_unregister_udp_proto;
 
+    /***********************************
+     * 注册 PING 协议
+     * *********************************/
 	rc = proto_register(&ping_prot, 1);
 	if (rc)
 		goto out_unregister_raw_proto;
 
 	/*
 	 *	Tell SOCKET that we are alive...
+     *	到此处，就可以将次
 	 */
-
 	(void)sock_register(&inet_family_ops);
 
 #ifdef CONFIG_SYSCTL
@@ -1832,15 +1845,27 @@ fs_initcall(inet_init);
 static int __init ipv4_proc_init(void)
 {
 	int rc = 0;
-
+    
+    //对应/proc/net/raw, dump Raw Socket table
 	if (raw_proc_init())
 		goto out_raw;
+
+    //对应/proc/net/tcp, dump Tcp Socket table
 	if (tcp4_proc_init())
 		goto out_tcp;
+
+    //对应/proc/net/udp, dump Udp Socket table
 	if (udp4_proc_init())
 		goto out_udp;
+
+    //对应/proc/net/icmp, dump Icmp Socket table
 	if (ping_proc_init())
 		goto out_ping;
+
+    //对应
+    //  /proc/net/sockstat, dump socket statistics information
+    //  /proc/net/netstate, dump network statistics information
+    //  /proc/net/snmp, SNMP related information
 	if (ip_misc_proc_init())
 		goto out_misc;
 out:

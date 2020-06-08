@@ -2018,7 +2018,7 @@ int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	tos &= IPTOS_RT_MASK;
 	rcu_read_lock();
 
-	/* Multicast recognition logic is moved from route cache to here.
+	/* Multicast recognition(识别) logic is moved from route cache to here.
 	   The problem was that too many Ethernet cards have broken/missing
 	   hardware multicast filters :-( As result the host on multicasting
 	   network acquires a lot of useless route cache entries, sort of

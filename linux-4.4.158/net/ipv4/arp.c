@@ -669,12 +669,19 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 	/* arp_rcv below verifies the ARP header and verifies the device
 	 * is ARP'able.
 	 */
-
+    /**************************************
+     * in_device 表示 IP 配置块
+     * 如果该设备不支持ipv4, 则直接跳出
+     * ************************************/
 	if (!in_dev)
 		goto out;
 
 	arp = arp_hdr(skb);
 
+    /**********************************************
+     * 二层媒介类型
+     * 目前只关心 ether，其他的忽略
+     * ********************************************/
 	switch (dev_type) {
 	default:
 		if (arp->ar_pro != htons(ETH_P_IP) ||
@@ -711,7 +718,10 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 	}
 
 	/* Understand only these message types */
-
+    /**************************************************
+     * ARP包类型只支持 REPLY和REQUEST，ARP协议描述的
+     * 其他消息类型像 RARP，InARP什么的通通不支持
+     * ************************************************/
 	if (arp->ar_op != htons(ARPOP_REPLY) &&
 	    arp->ar_op != htons(ARPOP_REQUEST))
 		goto out;
@@ -737,6 +747,9 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 /*
  *	Check for bad requests for 127.x.x.x and requests for multicast
  *	addresses.  If this is one such, delete it.
+ *  
+ *  对于多播地址和回环地址也不支持ARP，跳出
+ *
  */
 	if (ipv4_is_multicast(tip) ||
 	    (!IN_DEV_ROUTE_LOCALNET(in_dev) && ipv4_is_loopback(tip)))
@@ -763,14 +776,23 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
  *  about those for us and those for our proxies.  We reply to both,
  *  and in the case of requests for us we add the requester to the arp
  *  cache.
+ *
+ *  FIXME: 这一段是做什么的 ???
+ *
  */
-
+    
 	if (arp->ar_op == htons(ARPOP_REQUEST) && skb_metadata_dst(skb))
 		reply_dst = (struct dst_entry *)
 			    iptunnel_metadata_reply(skb_metadata_dst(skb),
 						    GFP_ATOMIC);
 
-	/* Special case: IPv4 duplicate address detection packet (RFC2131) */
+	
+    /* 
+     * Special case: IPv4 duplicate address detection packet (RFC2131) 
+     *
+     * 源IP为0.0.0.0的ARP包为DAD包，如果收到这个包，则就查看自身是不是
+     * 有指定的地址，如果有，则回复一个 REPLY
+     * */
 	if (sip == 0) {
 		if (arp->ar_op == htons(ARPOP_REQUEST) &&
 		    inet_addr_type_dev_table(net, dev, tip) == RTN_LOCAL &&
@@ -780,12 +802,19 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 		goto out;
 	}
 
+    /*******************************************************
+     * 如果当前是ARP_REQUEST 并且tip目的地址有路由可达，
+     * 则根据目的地址来进行相应的动作
+     * *****************************************************/
 	if (arp->ar_op == htons(ARPOP_REQUEST) &&
 	    ip_route_input_noref(skb, tip, sip, 0, dev) == 0) {
 
 		rt = skb_rtable(skb);
 		addr_type = rt->rt_type;
 
+        /**********************************************************
+         * 如果当前的地址是 LOCAL 地址，则
+         * */
 		if (addr_type == RTN_LOCAL) {
 			int dont_send;
 
@@ -804,6 +833,10 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 			}
 			goto out;
 		} else if (IN_DEV_FORWARD(in_dev)) {
+            /************************************************************
+             * 如果当前的 dev 支持启动了转发功能，并且当前的地址有相应的
+             * 代理entry，则走代理
+             * **********************************************************/
 			if (addr_type == RTN_UNICAST  &&
 			    (arp_fwd_proxy(in_dev, dev, rt) ||
 			     arp_fwd_pvlan(in_dev, dev, rt, sip, tip) ||

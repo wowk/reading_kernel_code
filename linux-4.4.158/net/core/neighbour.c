@@ -862,11 +862,18 @@ static void neigh_invalidate(struct neighbour *neigh)
 static void neigh_probe(struct neighbour *neigh)
 	__releases(neigh->lock)
 {
+    /*********************************************************
+     * FIXME: 这一段是干嘛的 ？？？？
+     * *******************************************************/
 	struct sk_buff *skb = skb_peek_tail(&neigh->arp_queue);
 	/* keep skb alive even if arp_queue overflows */
 	if (skb)
 		skb = skb_clone(skb, GFP_ATOMIC);
 	write_unlock(&neigh->lock);
+
+    /*********************************************************
+     * 立即发送 solicit 包
+     * *******************************************************/
 	if (neigh->ops->solicit)
 		neigh->ops->solicit(neigh, skb);
 	atomic_inc(&neigh->probes);
@@ -961,6 +968,15 @@ out:
 	neigh_release(neigh);
 }
 
+
+/*******************************************************************
+ * 对于IPv4而言，其主要调用路径如下：
+ *      ip_finish_output
+ *          ip_finish_output2
+ *              neigh->output (neigh_resolve_output)
+ *                  neigh_event_send
+ *                      __neigh_event_send
+ * *****************************************************************/
 int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 {
 	int rc;
@@ -968,12 +984,29 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 
 	write_lock_bh(&neigh->lock);
 
+    /*****************************************************************
+     *
+     * 返回0表示该skb可以直接发送，从此处可以看出，
+     *      NUD_CONNECTED, NUD_DELAY, NUD_PROBE 状态的 neigh entry可以
+     * 直接用来发送包
+     *
+     * ***************************************************************/
 	rc = 0;
 	if (neigh->nud_state & (NUD_CONNECTED | NUD_DELAY | NUD_PROBE))
 		goto out_unlock_bh;
-	if (neigh->dead)
+	
+    /*****************************************************************
+     * 已经确认不可达的地址，则无需发包, 直接丢弃包
+     * ***************************************************************/
+    if (neigh->dead)
 		goto out_dead;
 
+    /*****************************************************************
+     * 如果当前的包既不是 STATLE 状态，也不是 INCOMPLETE状态(NONE ???), 
+     * 则进行状态转换, 使其变为 INCOMPLETE 状态，然后发送solicit包.
+     * 如果 APP_PROBES 和 MCAST_PROBES 都没配置，则设为FAILED状态，
+     * 这时候，应该交给用户层DAEMON来处理.
+     * ***************************************************************/
 	if (!(neigh->nud_state & (NUD_STALE | NUD_INCOMPLETE))) {
 		if (NEIGH_VAR(neigh->parms, MCAST_PROBES) +
 		    NEIGH_VAR(neigh->parms, APP_PROBES)) {
@@ -988,6 +1021,10 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 			neigh_add_timer(neigh, next);
 			immediate_probe = true;
 		} else {
+            /****************************
+             * 变成 FAILED 后，丢弃该包，
+             * 返回1
+             * **************************/
 			neigh->nud_state = NUD_FAILED;
 			neigh->updated = jiffies;
 			write_unlock_bh(&neigh->lock);
@@ -996,6 +1033,15 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 			return 1;
 		}
 	} else if (neigh->nud_state & NUD_STALE) {
+        /*******************************************
+         * 如果当前是 STALE 状态，则变为 DELAY 状态,
+         * 并且设置定时器，DELAY_PROBE_TIME 时间后
+         * 如果无应答则转换到PROBE状态, 
+         *
+         * 转换为 DELAY 状态后，返回0，这样包可以直接
+         * 利用这条neigh entry发送出去，而不用进入
+         * neigh相关的 pending queue中.
+         * *****************************************/
 		neigh_dbg(2, "neigh %p is delayed\n", neigh);
 		neigh->nud_state = NUD_DELAY;
 		neigh->updated = jiffies;
@@ -1003,8 +1049,22 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 				NEIGH_VAR(neigh->parms, DELAY_PROBE_TIME));
 	}
 
+
+    /******************************************************
+     * 如果当前的 neigh entry 转换到了 NUD_INCOMPLETE
+     * 状态了，则不能直接使用其发包，而要发送solicit来
+     * 进行二层解析和可达验证，此时包不发送，而是加入到
+     * pending 队列 neigh->arp_queue 中，等待advertisment
+     * 的到来
+     * ***************************************************/
 	if (neigh->nud_state == NUD_INCOMPLETE) {
 		if (skb) {
+            /***************************************************
+             * 
+             * 如果队列中没有空间了，则尝试free掉队列中最老的skb
+             * 来腾出空间给当前的skb
+             *
+             * *************************************************/
 			while (neigh->arp_queue_len_bytes + skb->truesize >
 			       NEIGH_VAR(neigh->parms, QUEUE_LEN_BYTES)) {
 				struct sk_buff *buff;
@@ -1016,10 +1076,18 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 				kfree_skb(buff);
 				NEIGH_CACHE_STAT_INC(neigh->tbl, unres_discards);
 			}
+
+            /***************************************************
+             * 队列中有足够的空间后，现在开始将skb加入到队列中
+             * *************************************************/
 			skb_dst_force(skb);
 			__skb_queue_tail(&neigh->arp_queue, skb);
 			neigh->arp_queue_len_bytes += skb->truesize;
 		}
+
+        /***********************************************
+         * 返回1, 这样后续的发送动作便不会再做
+         * *********************************************/
 		rc = 1;
 	}
 out_unlock_bh:
