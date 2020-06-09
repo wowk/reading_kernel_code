@@ -1473,6 +1473,10 @@ static int __udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 		sk_incoming_cpu_update(sk);
 	}
 
+    /******************************************************
+     * 将skb 放入到 sk->sk_receive_queue 队列中然后返回
+     *
+     * ****************************************************/
 	rc = sock_queue_rcv_skb(sk, skb);
 	if (rc < 0) {
 		int is_udplite = IS_UDPLITE(sk);
@@ -1593,6 +1597,9 @@ int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	    udp_lib_checksum_complete(skb))
 		goto csum_error;
 
+    /********************************************************
+     * 如果socket的rx queue满了，则直接丢弃掉
+     * ******************************************************/
 	if (sk_rcvqueues_full(sk, sk->sk_rcvbuf)) {
 		UDP_INC_STATS_BH(sock_net(sk), UDP_MIB_RCVBUFERRORS,
 				 is_udplite);
@@ -1601,8 +1608,23 @@ int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 
 	rc = 0;
 
+    /******************************************************
+     * 初始化pktinfo，以便用户程序可以通过recvmsg获取
+     * ****************************************************/
 	ipv4_pktinfo_prepare(sk, skb);
+
 	bh_lock_sock(sk);
+
+    /******************************************************
+     * sock_owned_by_user 用来判断当前socket是否正在被用户
+     * 程序持有进行 recv/send。
+     *
+     * 如果没有，则直接将skb加入 socket 的 rx queue
+     *
+     * 如果有，则将该 skb 加入到后备队列，后续会重新加入
+     * socket 的 rx queue.
+     *
+     * ***************************************************/
 	if (!sock_owned_by_user(sk))
 		rc = __udp_queue_rcv_skb(sk, skb);
 	else if (sk_add_backlog(sk, skb, sk->sk_rcvbuf)) {
@@ -1818,6 +1840,13 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 		return __udp4_lib_mcast_deliver(net, skb, uh,
 						saddr, daddr, udptable, proto);
 
+
+    /*************************************************************
+     * 查询当前skb与那个socket相关连，如果没有关联的socket
+     * 那么我们会回送一个 PORT_UNREACHABLE 的 icmp 报文
+     *
+     * 如果找到了对应的socket，则将udp报文放入对应的socket队列
+     * ***********************************************************/
 	sk = __udp4_lib_lookup_skb(skb, uh->source, uh->dest, udptable);
 	if (sk) {
 		int ret;

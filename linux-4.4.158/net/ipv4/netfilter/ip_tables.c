@@ -1974,20 +1974,35 @@ struct xt_table *ipt_register_table(struct net *net,
 	struct xt_table_info bootstrap = {0};
 	void *loc_cpu_entry;
 	struct xt_table *new_table;
-
+    
+    /******************************************
+     * 创建 xt_table_info 用于存放该table
+     * 中的所有 rule
+     * ****************************************/
 	newinfo = xt_alloc_table_info(repl->size);
 	if (!newinfo) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
+    /************************************************
+     * 将 ipt_replace 中的内容都copy到 xt_table_info
+     * 中 （复制修改回写）
+     * **********************************************/
 	loc_cpu_entry = newinfo->entries;
 	memcpy(loc_cpu_entry, repl->entries, repl->size);
-
+    
+    /************************************************
+     * 将 offset[xx] 也拷贝到 xt_table_info 中，用于
+     * 获取 target 的偏移
+     * **********************************************/
 	ret = translate_table(net, newinfo, loc_cpu_entry, repl);
 	if (ret != 0)
 		goto out_free;
-
+    
+    /************************************************
+     * 新的 xt_table 注册到 net->xt[af].list 上
+     * **********************************************/
 	new_table = xt_register_table(net, table, &bootstrap, newinfo);
 	if (IS_ERR(new_table)) {
 		ret = PTR_ERR(new_table);
@@ -2134,6 +2149,9 @@ static int __init ip_tables_init(void)
 {
 	int ret;
 
+    /********************************************
+     * 创建并注册新的 xt_table 到 xt[af].list 上
+     * ******************************************/
 	ret = register_pernet_subsys(&ip_tables_net_ops);
 	if (ret < 0)
 		goto err1;

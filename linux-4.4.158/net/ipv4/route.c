@@ -1618,7 +1618,11 @@ static void ip_del_fnhe(struct fib_nh *nh, __be32 daddr)
 	spin_unlock_bh(&fnhe_lock);
 }
 
-/* called in rcu_read_lock() section */
+/* called in rcu_read_lock() section 
+ *
+ * 创建路由缓存项
+ *
+ * */
 static int __mkroute_input(struct sk_buff *skb,
 			   const struct fib_result *res,
 			   struct in_device *in_dev,
@@ -1638,6 +1642,11 @@ static int __mkroute_input(struct sk_buff *skb,
 		return -EINVAL;
 	}
 
+    /***********************************************************************
+     * FIXME: 
+     *
+     * 验证源地址是否OK，细节部分待补充
+     * *********************************************************************/
 	err = fib_validate_source(skb, saddr, daddr, tos, FIB_RES_OIF(*res),
 				  in_dev->dev, in_dev, &itag);
 	if (err < 0) {
@@ -1647,6 +1656,7 @@ static int __mkroute_input(struct sk_buff *skb,
 		goto cleanup;
 	}
 
+    
 	do_cache = res->fi && !itag;
 	if (out_dev == in_dev && err && IN_DEV_TX_REDIRECTS(out_dev) &&
 	    skb->protocol == htons(ETH_P_IP) &&
@@ -1780,6 +1790,11 @@ static int ip_mkroute_input(struct sk_buff *skb,
 			    __be32 daddr, __be32 saddr, u32 tos)
 {
 #ifdef CONFIG_IP_ROUTE_MULTIPATH
+    /******************************************************
+     * FIXME:
+     * 多路径的使用和通过网络连接的存储设备相关，这个待
+     * 了解
+     * ****************************************************/
 	if (res->fi && res->fi->fib_nhs > 1) {
 		int h;
 
@@ -1904,11 +1919,18 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	/******************************************************
 	 * 如果包是发往 Other HOST 的，
 	 * 则将指针初始化为 ip_forward 进行处理
+     *
+     * 此处判断设备是否支持转发，如果不支持，
+     * 则提示路由不可达错误
 	 * ***************************************************/
 	if (!IN_DEV_FORWARD(in_dev)) {
 		err = -EHOSTUNREACH;
 		goto no_route;
 	}
+
+    /******************************************************
+     * 此处只只处理单播包，多播和广播在别的地方处理
+     * ****************************************************/
 	if (res.type != RTN_UNICAST)
 		goto martian_destination;
 
@@ -2006,6 +2028,10 @@ e_nobufs:
 	goto out;
 
 martian_source:
+    /*********************************************************
+     * 打印出 martian socket 的具体信息, 记录下当前遇到了
+     * martian socket
+     * *******************************************************/
 	ip_handle_martian_source(dev, in_dev, skb, daddr, saddr);
 	goto out;
 }
@@ -2069,6 +2095,10 @@ int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 
 	/******************************************************
 	 * 到达这儿说明包不是多播，那就看他是转发还是本地收包
+     *
+     * ip_route_input_slow 正式去查找路由表
+     *
+     * 开始来看路由策略和路由表的查询过程
 	 * ***************************************************/
 	res = ip_route_input_slow(skb, daddr, saddr, tos, dev);
 	rcu_read_unlock();

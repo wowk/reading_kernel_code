@@ -26,6 +26,10 @@
 br_should_route_hook_t __rcu *br_should_route_hook __read_mostly;
 EXPORT_SYMBOL(br_should_route_hook);
 
+
+/*******************************************************************
+ * 重入协议栈
+ * *****************************************************************/
 static int
 br_netif_receive_skb(struct net *net, struct sock *sk, struct sk_buff *skb)
 {

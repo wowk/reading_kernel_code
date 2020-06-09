@@ -189,6 +189,7 @@ bool ip_call_ra_chain(struct sk_buff *skb)
 	return false;
 }
 
+
 static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	__skb_pull(skb, skb_network_header_len(skb));
@@ -210,6 +211,14 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 		/**********************************************
 		 * 通过协议号找到相应的协议，然后调用其handler
 		 * 将skb交给他处理
+         *
+         * 协议的添加通过函数
+         *      inet_add_protocol 
+         * 来完成，目前添加的协议有
+         * ICMP/TCP/UDP/IPIP/....   等等
+         *
+         * 其handler通常是如下:
+         *      icmp_rcv, udp_rcv, tcp_v4_rcv
 		 * *******************************************/
 		ipprot = rcu_dereference(inet_protos[protocol]);
 		if (ipprot) {
@@ -270,6 +279,10 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 
 /*
  * 	Deliver IP Packets to the higher protocol layers.
+ *
+ * 收到的包在经过路由查询后会将output函数指针设定为
+ * ip_local_deliver, 也就会走到这个地方
+ *
  */
 int ip_local_deliver(struct sk_buff *skb)
 {
@@ -325,6 +338,9 @@ static inline bool ip_rcv_options(struct sk_buff *skb)
 
 	iph = ip_hdr(skb);
 	opt = &(IPCB(skb)->opt);
+    /*************************************************
+     * 所有 options 头的长度
+     * ***********************************************/
 	opt->optlen = iph->ihl*4 - sizeof(struct iphdr);
 
 	if (ip_options_compile(dev_net(dev), opt, skb)) {
@@ -361,7 +377,37 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	const struct iphdr *iph = ip_hdr(skb);
 	struct rtable *rt;
-
+    
+    /***************************************************************
+     *  ipv4: Early TCP socket demux.
+     *  
+     *  Input packet processing for local sockets involves two major demuxes.
+     *  One for the route and one for the socket.
+     *
+     *  But we can optimize this down to one demux for certain kinds of local
+     *  sockets.
+     *
+     *  Currently we only do this for established TCP sockets, but it could
+     *  at least in theory be expanded to other kinds of connections.
+     *
+     *  If a TCP socket is established then it's identity is fully specified.
+     *
+     *  This means that whatever input route was used during the three-way
+     *  handshake must work equally well for the rest of the connection since
+     *  the keys will not change.
+     *
+     *  Once we move to established state, we cache the receive packet's input
+     *  route to use later.
+     *
+     *  Like the existing cached route in sk->sk_dst_cache used for output
+     *  packets, we have to check for route invalidations using dst->obsolete
+     *  and dst->ops->check().
+     *
+     *  Early demux occurs outside of a socket locked section, so when a route
+     *  invalidation occurs we defer the fixup of sk->sk_rx_dst until we are
+     *  actually inside of established state packet processing and thus have
+     *  the socket locked.
+     * *********************************************************************/
 	if (sysctl_ip_early_demux && !skb_dst(skb) && !skb->sk) {
 		const struct net_protocol *ipprot;
 		int protocol = iph->protocol;
@@ -388,7 +434,7 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 	 *  但其实他是一个指向 dst_entry 的指针。
 	 *
 	 *  在skb_clone的时候，其实这个指针是被直接赋值给clone的skb的
-	 *  也就是说，dst_entry 不会被复制，而是直接被复用了。
+	 *  也就是说，dst_entry 不会被复制，而是直接被引用了。
 	 *****************************************************************/
 	if (!skb_valid_dst(skb)) {
 
@@ -429,7 +475,7 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 
 
 	/*********************************************************
-	 * 获取路由表项，其实就是之前的 dst_entry, 前面已经进行了
+	 * 获取路由缓存项，其实就是之前的 dst_entry, 前面已经进行了
 	 * skb dst的查找，查找不到的已经被丢弃了，能走到这儿的说明
 	 * 一定存在相对应的表项
 	 *
@@ -489,6 +535,11 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 		goto out;
 	}
 
+    /******************************************************
+     * 处理存在分片的情况，如果包存在分片，那么此处会确保
+     * ip头在单独的skb中，如果不在，则做调整，确保其处于
+     * 线性缓冲中，以便后续进行解析操作
+     * ****************************************************/
 	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
 		goto inhdr_error;
 
@@ -505,6 +556,10 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	 *	4.	Doesn't have a bogus length
 	 */
 
+    /******************************************************
+     * 基本的检查：
+     *      如果头部长度小于20 或者版本号不是 IPv4，则丢弃
+     * ****************************************************/
 	if (iph->ihl < 5 || iph->version != 4)
 		goto inhdr_error;
 
@@ -520,9 +575,19 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 
 	iph = ip_hdr(skb);
 
+
+    /**********************************************************
+     * 检查校验和，不正确则丢弃
+     * ********************************************************/
 	if (unlikely(ip_fast_csum((u8 *)iph, iph->ihl)))
 		goto csum_error;
 
+    /**********************************************************
+     * tot_len ： 表示 total length，指整个IP包的长度,
+     *
+     * 如果长度 大于 skb->len 或 小于 iphdr 长度，则可确认
+     * 是非法值，丢弃掉.
+     * ********************************************************/
 	len = ntohs(iph->tot_len);
 	if (skb->len < len) {
 		IP_INC_STATS_BH(net, IPSTATS_MIB_INTRUNCATEDPKTS);
@@ -532,7 +597,9 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 
 	/* Our transport medium may have padded the buffer out. Now we know it
 	 * is IP we can trim to the true length of the frame.
-	 * Note this now means skb->len holds ntohs(iph->tot_len).
+	 * Note this now means ***skb->len holds ntohs(iph->tot_len).***
+     *
+     * 到此处，二层头便被抹除了
 	 */
 	if (pskb_trim_rcsum(skb, len)) {
 		IP_INC_STATS_BH(net, IPSTATS_MIB_INDISCARDS);
@@ -544,10 +611,24 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	 * *****************************************************/
 	skb->transport_header = skb->network_header + iph->ihl*4;
 
-	/* Remove any debris in the socket control block */
+	/* 
+     * Remove any debris in the socket control block 
+     *
+     * 清空二层遗留下来的control buffer block, 
+     *
+     * 为之后存放三层的 contorl buffer block 做准备
+     *
+     * */
 	memset(IPCB(skb), 0, sizeof(struct inet_skb_parm));
 
-	/* Must drop socket now because of tproxy. */
+	/* 
+     * Must drop socket now because of tproxy. 
+     *
+     * 如果skb被其他人持有，则调用skb_orphan, 使skb成为孤儿，
+     *
+     * 相当于把所有权抢过来了
+     *
+     * */
 	skb_orphan(skb);
 
 	/*******************************************************

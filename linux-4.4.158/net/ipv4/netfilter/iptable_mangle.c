@@ -28,6 +28,9 @@ MODULE_DESCRIPTION("iptables mangle table");
 			    (1 << NF_INET_LOCAL_OUT) | \
 			    (1 << NF_INET_POST_ROUTING))
 
+/*********************************************************
+ * 这个是用于创建 table 的模板
+ * *******************************************************/
 static const struct xt_table packet_mangler = {
 	.name		= "mangle",
 	.valid_hooks	= MANGLE_VALID_HOOKS,
@@ -96,10 +99,22 @@ static struct nf_hook_ops *mangle_ops __read_mostly;
 static int __net_init iptable_mangle_net_init(struct net *net)
 {
 	struct ipt_replace *repl;
-
+    
+    /***********************************************
+     * 根据 template 创建一个 ipt_replace
+     *
+     * iptable 使用的是 RCU 模式，首先根据原始的数据
+     * 创建一个ipt_replace，然后对ipt_replace 进行
+     * 修改，修改完后再回写
+     * *********************************************/
 	repl = ipt_alloc_initial_table(&packet_mangler);
 	if (repl == NULL)
 		return -ENOMEM;
+
+    /*************************************************
+     * 通过 template_mangle 和 repl 创建一个新的
+     * xt_table，并注册到 netns
+     * ***********************************************/
 	net->ipv4.iptable_mangle =
 		ipt_register_table(net, &packet_mangler, repl);
 	kfree(repl);
@@ -119,7 +134,12 @@ static struct pernet_operations iptable_mangle_net_ops = {
 static int __init iptable_mangle_init(void)
 {
 	int ret;
-
+    
+    /****************************************************
+     * 添加并初始化每个netns 中的 mangle table 项:
+     *     内部就是调用 iptable_mangle_net_init 做初始化
+     *     动作的
+     * **************************************************/
 	ret = register_pernet_subsys(&iptable_mangle_net_ops);
 	if (ret < 0)
 		return ret;

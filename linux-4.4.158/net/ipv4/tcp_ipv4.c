@@ -1573,6 +1573,10 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	/* Count it even if it's bad */
 	TCP_INC_STATS_BH(net, TCP_MIB_INSEGS);
 
+
+    /***************************************************
+     * 把tcp头囊括进linear缓冲以便解析
+     * *************************************************/
 	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
 		goto discard_it;
 
@@ -1600,6 +1604,10 @@ int tcp_v4_rcv(struct sk_buff *skb)
 		sizeof(struct inet_skb_parm));
 	barrier();
 
+
+    /***************************************************
+     * TCP 控制块信息 的初始化
+     * *************************************************/
 	TCP_SKB_CB(skb)->seq = ntohl(th->seq);
 	TCP_SKB_CB(skb)->end_seq = (TCP_SKB_CB(skb)->seq + th->syn + th->fin +
 				    skb->len - th->doff * 4);
@@ -1609,11 +1617,24 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	TCP_SKB_CB(skb)->ip_dsfield = ipv4_get_dsfield(iph);
 	TCP_SKB_CB(skb)->sacked	 = 0;
 
+    /*******************************************************
+     * 现在来查一下，这个skb是发给哪个socket的
+     *
+     * 其内部就是查询一个 hashtable
+     *
+     * 如果没有对应的tcp socket在监听，则直接丢弃并返回rst
+     * *****************************************************/
 lookup:
 	sk = __inet_lookup_skb(&tcp_hashinfo, skb, th->source, th->dest);
 	if (!sk)
 		goto no_tcp_socket;
 
+    /*******************************************************
+     * 找到了对应 socket，下面就是进行 tcp 状态机的转换了，
+     *
+     * 根据当前socket的状态以及收到的包来进行状态转换
+     *
+     * ******************************************************/
 process:
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
