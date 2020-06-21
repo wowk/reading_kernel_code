@@ -4351,6 +4351,13 @@ struct sk_buff *skb_vlan_untag(struct sk_buff *skb)
 	/***************************************************
 	 * 从这儿可以看出，skb->data 是指向三层头的，但是
 	 * 在哪里设置的还需要看一下
+     *
+     *
+     * 2020.06.07
+     *      skb->data 是在driver中的函数 eth_type_trans 中
+     *      设定的. skb->data最初只想包的起始地址，在该函数
+     *      中调用skb_reset_mac_header后，调用skb_pull(skb, ETH_HLEN)
+     *      使skb->data跳过mac_header指向三层网络头.
 	 * ************************************************/
 	vhdr = (struct vlan_hdr *)skb->data;
 	vlan_tci = ntohs(vhdr->h_vlan_TCI);
@@ -4358,12 +4365,27 @@ struct sk_buff *skb_vlan_untag(struct sk_buff *skb)
 
 	/* 跳过vlan头 */
 	skb_pull_rcsum(skb, VLAN_HLEN);
+
+    /***************************************************
+     *
+     * 重新更新 skb->protocol 为 ETH_P_802_3
+     *
+     * *************************************************/
 	vlan_set_encap_proto(skb, vhdr);
 
+
+    /***************************************************
+     * 将mac_header通过memmove复制到vlan_header所在的位置，
+     * 使其紧挨着network_header.
+     * *************************************************/
 	skb = skb_reorder_vlan_header(skb);
 	if (unlikely(!skb))
 		goto err_free;
+    
 
+    /***************************************************
+     * 剥掉vlantag后，重新更新network_header
+     * *************************************************/
 	skb_reset_network_header(skb);
 	skb_reset_transport_header(skb);
 	skb_reset_mac_len(skb);

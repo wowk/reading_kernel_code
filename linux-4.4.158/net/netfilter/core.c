@@ -367,6 +367,34 @@ next_hook:
 	/****************************************************************
 	 * 暂时不知道 iptables 规则在 kernel 中是如何分类组织的，这一点
 	 * 要继续的学习一个
+     *
+     * 2020/06/21
+     *      这儿遍历的是每个表中的每个指定chain，比如：
+     *              所有表中的 PREROUTING chain，
+     *              或者是
+     *              所有表中的 INPUT chain，
+     *
+     *      每次调用 NF_HOOK 的时候，都会遍历所有表中的指定一个 chain，
+     *
+     *      其顺序如下：
+     *          
+     *           enum nf_ip_hook_priorities {
+     *           	NF_IP_PRI_FIRST = INT_MIN,
+     *           	NF_IP_PRI_CONNTRACK_DEFRAG = -400,
+     *           	NF_IP_PRI_RAW = -300,
+     *           	NF_IP_PRI_SELINUX_FIRST = -225,
+     *           	NF_IP_PRI_CONNTRACK = -200,
+     *           	NF_IP_PRI_MANGLE = -150,
+     *           	NF_IP_PRI_NAT_DST = -100,
+     *           	NF_IP_PRI_FILTER = 0,
+     *           	NF_IP_PRI_SECURITY = 50,
+     *           	NF_IP_PRI_NAT_SRC = 100,
+     *           	NF_IP_PRI_SELINUX_LAST = 225,
+     *           	NF_IP_PRI_CONNTRACK_HELPER = 300,
+     *           	NF_IP_PRI_CONNTRACK_CONFIRM = INT_MAX,
+     *           	NF_IP_PRI_LAST = INT_MAX,
+     *           };
+     *          
 	 * *************************************************************/
 	verdict = nf_iterate(state->hook_list, skb, state, &elem);
 	if (verdict == NF_ACCEPT || verdict == NF_STOP) {

@@ -53,6 +53,10 @@ int br_handle_frame_finish(struct sk_buff *skb)
 	struct net_bridge_port *p;
 	int passedup;
 
+	/********************************************
+	 * 同样，先检查 brport 是不是 DISABLED状态，
+	 * 是就把包丢弃不管
+	 * ******************************************/
 	dest = skb->mac.ethernet->h_dest;
 
 	rcu_read_lock();
@@ -66,6 +70,10 @@ int br_handle_frame_finish(struct sk_buff *skb)
 
 	br = p->br;
 	passedup = 0;
+	/**********************************
+	 * 如果 br 处于混杂模式，则clone
+	 * skb 并将其传递到协议栈上层去
+	 * ********************************/
 	if (br->dev->flags & IFF_PROMISC) {
 		struct sk_buff *skb2;
 
@@ -76,6 +84,13 @@ int br_handle_frame_finish(struct sk_buff *skb)
 		}
 	}
 
+	/****************************************
+	 * 如果目的MAC是多播地址，则 flood 出去
+	 *
+	 * 如果该包没有传递到上层，则向上层也传递、
+	 * 一份，因为既然是多播包，那也我们自己
+	 * 也应该要收到才对
+	 * **************************************/
 	if (dest[0] & 1) {
 		br_flood_forward(br, skb, !passedup);
 		if (!passedup)
@@ -83,6 +98,12 @@ int br_handle_frame_finish(struct sk_buff *skb)
 		goto out;
 	}
 
+	/*****************************************
+	 * 能到这儿那就意味着包是L2单播
+	 *
+	 * 我们查一下 fdb， 
+	 * 如果是local的，则传递到上层
+	 * ***************************************/
 	dst = __br_fdb_get(br, dest);
 	if (dst != NULL && dst->is_local) {
 		if (!passedup)
@@ -92,11 +113,17 @@ int br_handle_frame_finish(struct sk_buff *skb)
 		goto out;
 	}
 
+	/******************************************
+	 * 如果不是local的，则转发出去
+	 * ****************************************/
 	if (dst != NULL) {
 		br_forward(dst->dst, skb);
 		goto out;
 	}
 
+	/******************************************
+	 * 如果找不到 fdb，则flood出去
+	 * ****************************************/
 	br_flood_forward(br, skb, 0);
 
 out:
@@ -110,19 +137,32 @@ int br_handle_frame(struct sk_buff *skb)
 	struct net_bridge_port *p;
 
 	dest = skb->mac.ethernet->h_dest;
-
+	
 	rcu_read_lock();
+	/***********************************************
+	 * 如果该 brport 处于 DISABLE 状态，则丢弃该包
+	 * *********************************************/
 	p = skb->dev->br_port;
 	if (p == NULL || p->state == BR_STATE_DISABLED)
 		goto err;
 
+	/************************************************
+	 * 如果是L2多播包，则丢弃
+	 * **********************************************/
 	if (skb->mac.ethernet->h_source[0] & 1)
 		goto err;
 
+	/************************************************
+	 * 如果brport处于 LEARNING 或 FORWARDING 状态，
+	 * 则更新 fdb
+	 * **********************************************/
 	if (p->state == BR_STATE_LEARNING ||
 	    p->state == BR_STATE_FORWARDING)
 		br_fdb_insert(p->br, p, skb->mac.ethernet->h_source, 0);
 
+	/************************************************
+	 * 如果 STP enabled，则处理STP包
+	 * **********************************************/
 	if (p->br->stp_enabled &&
 	    !memcmp(dest, bridge_ula, 5) &&
 	    !(dest[5] & 0xF0)) {
@@ -135,14 +175,25 @@ int br_handle_frame(struct sk_buff *skb)
 	}
 
 	else if (p->state == BR_STATE_FORWARDING) {
+		/***********************************************
+		 * 走 ebtables BROUTING 表进行处理
+		 * *********************************************/ 
 		if (br_should_route_hook && br_should_route_hook(&skb)) {
 			rcu_read_unlock();
 			return -1;
 		}
-
+		
+		/***********************************************
+		 * 如果包是发给当前 HOST 的，则设置其pkt_type
+		 * 为 PACKET_HOST
+		 * *********************************************/
 		if (!memcmp(p->br->dev->dev_addr, dest, ETH_ALEN))
 			skb->pkt_type = PACKET_HOST;
 
+		/***********************************************
+		 * 走 brnetfilter ，然后进行第二阶段处理:
+		 *        br_handle_frame_finish
+		 * *********************************************/
 		NF_HOOK(PF_BRIDGE, NF_BR_PRE_ROUTING, skb, skb->dev, NULL,
 			br_handle_frame_finish);
 		rcu_read_unlock();

@@ -3903,15 +3903,38 @@ static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
 	orig_dev = skb->dev;
 
     /*******************************************
+     * mac_header
      * network_header
      * transport header
      *
-     * 上述两个都是到 skb->header 的偏移值
+     * 上述两个都是到 skb->head 的偏移值
      *
+     * skb->head 指向的是skbuff缓冲区的起始地址
+     * 这个缓冲区由NIC driver申请, 其size通常会比
+     * packet的size大, 并且其类似于栈，总是先用高
+     * 内存，所以头部通常会有多余的空间.
+     * 
+     * skb->mac_header
+     * 在driver中收包后，skb->data 指向包的起始地址，也就是mac header
+     * 此时，会在 eth_type_trans 中通过 skb_reset_mac_header 设置mac_header
+     * 相对于skb->head的偏移skb->mac_header
+     *
+     * 在设置skb->mac_header后，会通过 skb_pull(skb, ETH_HLEN)来调整skb->data,
+     * 使skb->data指向network header, 其实际上动作就是 skb->data += ETH_HLEN.
+     *
+     * 在此处调用 skb_reset_network_header, 此时 skb->network_header 为网络层头
+     * 相对于skb->head的偏移.
+     *
+     * 
      * ****************************************/
 	skb_reset_network_header(skb);
 	if (!skb_transport_header_was_set(skb))
 		skb_reset_transport_header(skb);
+
+    /*******************************************
+     *
+     * 通过两个header算出二层头的长度
+     * *****************************************/
 	skb_reset_mac_len(skb);
 
 
@@ -3965,6 +3988,13 @@ another_round:
              * 这个包直接丢弃
              * ******************************/
 			goto out;
+
+        /**********************************************************
+         *
+         * 到此处开始，VLANtag被剥掉，mac_header/network_header
+         * 都被调整到正确的位置了
+         *
+         * ********************************************************/
 	}
 
 #ifdef CONFIG_NET_CLS_ACT
@@ -4028,6 +4058,16 @@ ncls:
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 			pt_prev = NULL;
 		}
+        /**************************************************
+         * 这个函数是 VLAN 实现的关键入口函数，前面只是
+         * 解析VLAN头，现在是真正的处理VLAN的协议了.
+         *
+         * 处理完成后，会把 skb->vlan_tci 设为0，那么进行
+         * another round的时候，再次调用skb_vlan_tag_present
+         * 就会返回false，这样便不会再进行vlan处理了，也就是说
+         * 
+         * 此时skb已经变成一个普通的数据包了.
+         * ************************************************/
 		if (vlan_do_receive(&skb))
 			goto another_round;
 		else if (unlikely(!skb))
@@ -4090,6 +4130,9 @@ ncls:
 		skb->vlan_tci = 0;
 	}
 
+    /****************************************************
+     * 此时 skb->protocol 应该是 ETH_P_802_3
+     * **************************************************/
 	type = skb->protocol;
 
 	/* deliver only exact match when indicated */
@@ -7633,6 +7676,12 @@ out:
 }
 EXPORT_SYMBOL_GPL(dev_change_net_namespace);
 
+
+/*******************************************************
+ * 处理 CPU 挂掉的情况
+ *
+ * 在 CPU 挂掉的时候将 CPU RX队列上的包都处理掉
+ * *****************************************************/
 static int dev_cpu_callback(struct notifier_block *nfb,
 			    unsigned long action,
 			    void *ocpu)
@@ -7642,6 +7691,10 @@ static int dev_cpu_callback(struct notifier_block *nfb,
 	unsigned int cpu, oldcpu = (unsigned long)ocpu;
 	struct softnet_data *sd, *oldsd;
 
+	/**************************************************
+	 * 如果不是 CPU DEAD 事件，则直接跳过，让下一个
+	 * handler 来处理 这个 CPU 热插拔事件。
+	 * ************************************************/
 	if (action != CPU_DEAD && action != CPU_DEAD_FROZEN)
 		return NOTIFY_OK;
 

@@ -38,6 +38,12 @@ static void fdb_notify(struct net_bridge *br,
 
 static u32 fdb_salt __read_mostly;
 
+
+/*********************************************************
+ * 创建fdb cache
+ *
+ * 所有 fdb 共享 cache ？？？
+ * *******************************************************/
 int __init br_fdb_init(void)
 {
 	br_fdb_cache = kmem_cache_create("bridge_fdb_cache",

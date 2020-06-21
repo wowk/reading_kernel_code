@@ -1577,15 +1577,26 @@ static int ip_route_input_slow(struct sk_buff *skb, u32 daddr, u32 saddr,
 	if (!in_dev)
 		goto out;
 
+	/**********************************************
+	 * 首先找到路由缓存表的 HASH 项
+	 *
+	 * ********************************************/
 	hash = rt_hash_code(daddr, saddr ^ (fl.iif << 5), tos);
 
 	/* Check for the most weird martians, which can be not detected
 	   by fib_lookup.
 	 */
 
+	/****************************************
+	 * 如果是多播/回环/或其他，则跳到
+	 * martain_source 处理
+	 * **************************************/
 	if (MULTICAST(saddr) || BADCLASS(saddr) || LOOPBACK(saddr))
 		goto martian_source;
 
+	/****************************************
+	 * 广播包逻辑处理
+	 * **************************************/
 	if (daddr == 0xFFFFFFFF || (saddr == 0 && daddr == 0))
 		goto brd_input;
 
@@ -1600,6 +1611,7 @@ static int ip_route_input_slow(struct sk_buff *skb, u32 daddr, u32 saddr,
 
 	/*
 	 *	Now we are ready to route packet.
+	 *	fib_lookup 进行路由查找
 	 */
 	if ((err = fib_lookup(&fl, &res)) != 0) {
 		if (!IN_DEV_FORWARD(in_dev))
@@ -1689,6 +1701,9 @@ static int ip_route_input_slow(struct sk_buff *skb, u32 daddr, u32 saddr,
 			goto e_inval;
 	}
 
+	/**********************************
+	 * 查找到FIB后添加到路由缓存
+	 * ********************************/
 	rth = dst_alloc(&ipv4_dst_ops);
 	if (!rth)
 		goto e_nobufs;
@@ -1864,6 +1879,10 @@ int ip_route_input(struct sk_buff *skb, u32 daddr, u32 saddr,
 	hash = rt_hash_code(daddr, saddr ^ (iif << 5), tos);
 
 	rcu_read_lock();
+	/******************************************************
+	 * 通过路由缓存 HASH 表找到对应的 rtable cache，并将其
+	 * 更新到skb->dst，这样skb就知道路由信息了
+	 * ****************************************************/
 	for (rth = rt_hash_table[hash].chain; rth; rth = rth->u.rt_next) {
 		smp_read_barrier_depends();
 		if (rth->fl.fl4_dst == daddr &&
@@ -1879,6 +1898,10 @@ int ip_route_input(struct sk_buff *skb, u32 daddr, u32 saddr,
 			rth->u.dst.__use++;
 			RT_CACHE_STAT_INC(in_hit);
 			rcu_read_unlock();
+			/********************************
+			 * 查找到 dst_entry 了
+			 * （rtable 和 dst_entry 是一家）
+			 * ******************************/
 			skb->dst = (struct dst_entry*)rth;
 			return 0;
 		}
@@ -1917,6 +1940,14 @@ int ip_route_input(struct sk_buff *skb, u32 daddr, u32 saddr,
 		read_unlock(&inetdev_lock);
 		return -EINVAL;
 	}
+
+	/*******************************************************
+	 * 如果没有查找到 rtable cache，则进行正式的路由查询,
+	 * 查到后会将FIB加入路由缓存，路由缓存和中有个 
+	 *      input 和 output 两个接口
+	 * input 会根据路由结果 设置为 ip_forward 和 ip_local_deliver
+	 *
+	 * *****************************************************/
 	return ip_route_input_slow(skb, daddr, saddr, tos, dev);
 }
 

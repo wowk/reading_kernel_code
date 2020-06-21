@@ -13,15 +13,31 @@ bool vlan_do_receive(struct sk_buff **skbp)
 	struct net_device *vlan_dev;
 	struct vlan_pcpu_stats *rx_stats;
 
+    /*************************************************
+     * 首先查找vlan device，看本机是不是会处理该VLAN，
+     * 如果不支持，就丢弃这个包
+     * **********************************************/
 	vlan_dev = vlan_find_dev(skb->dev, vlan_proto, vlan_id);
 	if (!vlan_dev)
 		return false;
-
+    
 	skb = *skbp = skb_share_check(skb, GFP_ATOMIC);
 	if (unlikely(!skb))
 		return false;
 
+    /************************************************
+     * 修改 skb->dev ，这样进行next round的时候，包就会
+     * 交由vlan device进行处理
+     * **********************************************/
 	skb->dev = vlan_dev;
+
+    /****************************************************
+     * 由于可以给VLANdevice assign一个自定义的MAC，所以
+     * 当phy device收到的时候，可能会把该包识别为其他
+     * Host的包，那这时候我们就要再判断一下，这个包是不是
+     * 发给VLANdevice的, 如果是，则吧 pkt_type 重新设置为
+     * PACKET_HOST
+     * **************************************************/
 	if (unlikely(skb->pkt_type == PACKET_OTHERHOST)) {
 		/* Our lower layer thinks this is not local, let's make sure.
 		 * This allows the VLAN to have a different MAC than the
@@ -30,6 +46,9 @@ bool vlan_do_receive(struct sk_buff **skbp)
 			skb->pkt_type = PACKET_HOST;
 	}
 
+    /*****************************************************
+     * 更新mac_header的偏移
+     * ***************************************************/
 	if (!(vlan_dev_priv(vlan_dev)->flags & VLAN_FLAG_REORDER_HDR) &&
 	    !netif_is_macvlan_port(vlan_dev) &&
 	    !netif_is_bridge_port(vlan_dev)) {
@@ -41,6 +60,10 @@ bool vlan_do_receive(struct sk_buff **skbp)
 		 * original position later
 		 */
 		skb_push(skb, offset);
+
+        /****************************************************
+         * 在vlan_insert_tag中会通过memmove 覆盖掉vlan_header
+         * **************************************************/
 		skb = *skbp = vlan_insert_tag(skb, skb->vlan_proto,
 					      skb->vlan_tci);
 		if (!skb)
@@ -53,7 +76,9 @@ bool vlan_do_receive(struct sk_buff **skbp)
 	skb->vlan_tci = 0;
 
 	rx_stats = this_cpu_ptr(vlan_dev_priv(vlan_dev)->vlan_pcpu_stats);
-
+    /*********************************************************
+     * 更新rx统计数据
+     * *******************************************************/
 	u64_stats_update_begin(&rx_stats->syncp);
 	rx_stats->rx_packets++;
 	rx_stats->rx_bytes += skb->len;

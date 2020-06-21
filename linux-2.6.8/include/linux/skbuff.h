@@ -192,9 +192,15 @@ struct skb_shared_info {
 
 struct sk_buff {
 	/* These two members must be first. */
+	/****************************************
+	 * skb list 的前后引用
+	 * **************************************/
 	struct sk_buff		*next;
 	struct sk_buff		*prev;
-
+	
+	/****************************************
+	 * skb list 的链表头
+	 * **************************************/
 	struct sk_buff_head	*list;
 	struct sock		*sk;
 	struct timeval		stamp;

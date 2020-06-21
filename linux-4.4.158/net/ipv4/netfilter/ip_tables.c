@@ -1974,24 +1974,30 @@ struct xt_table *ipt_register_table(struct net *net,
 	struct xt_table_info bootstrap = {0};
 	void *loc_cpu_entry;
 	struct xt_table *new_table;
-    
-    /******************************************
-     * 创建 xt_table_info 用于存放该table
-     * 中的所有 rule
-     * ****************************************/
+
+
+    /***********************************************************
+     * 申请一个内存空间，其包含一个 xt_table_info 对象，以及
+     * 后面跟着一块内存，可以包含表中所有的CHAIN
+     * *********************************************************/
 	newinfo = xt_alloc_table_info(repl->size);
 	if (!newinfo) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
-    /************************************************
+    /***********************************************************
      * 将 ipt_replace 中的内容都copy到 xt_table_info
      * 中 （复制修改回写）
-     * **********************************************/
+     * 
+     * 2020/06/21
+     * entries成员的定义是 entries[0],
+     *
+     * newinfo->entries 正好指向 CHAINs 结构所在的结构
+     * *********************************************************/
 	loc_cpu_entry = newinfo->entries;
 	memcpy(loc_cpu_entry, repl->entries, repl->size);
-    
+
     /************************************************
      * 将 offset[xx] 也拷贝到 xt_table_info 中，用于
      * 获取 target 的偏移
@@ -1999,7 +2005,7 @@ struct xt_table *ipt_register_table(struct net *net,
 	ret = translate_table(net, newinfo, loc_cpu_entry, repl);
 	if (ret != 0)
 		goto out_free;
-    
+
     /************************************************
      * 新的 xt_table 注册到 net->xt[af].list 上
      * **********************************************/
@@ -2149,22 +2155,59 @@ static int __init ip_tables_init(void)
 {
 	int ret;
 
-    /********************************************
+    /**********************************************************
+     * 
      * 创建并注册新的 xt_table 到 xt[af].list 上
-     * ******************************************/
+     * 
+     * 2020/06/21
+     * 将 IPTABLES 注册到每一个 net_namespace, 这样所有的
+     * net_namespace 都可以支持 iptables 了
+     *
+     * 在 register_pernet_subsys 中， 会调用 pernet_operations->init()
+     *
+     * 在此处也就是 ip_tables_net_init 会被调用
+     *
+     * 在unregister的时候，会调用 ip_table_net_exit
+     * ********************************************************/
 	ret = register_pernet_subsys(&ip_tables_net_ops);
 	if (ret < 0)
 		goto err1;
 
 	/* No one else will be downing sem now, so we won't sleep */
+    /***********************************************************************
+     * FIXME:
+     * 注册一个标准的 target，暂时不知道他是干什么用的
+     *
+     * 2020/06/21
+     *      该处目的是添加一个内置的target "ERROR"，
+     *
+     *      该 target 和 NFLOG/LOG 等target类似 （在iptables中 -j 参数指定）
+     * *********************************************************************/
 	ret = xt_register_targets(ipt_builtin_tg, ARRAY_SIZE(ipt_builtin_tg));
 	if (ret < 0)
 		goto err2;
+
+    /***********************************************************************
+     * FIXME:
+     * 注册一个标准的 match，其内部是在匹配 icmp，其目的是什么
+     *
+     * 2020/06/21
+     *      该处的目的是添加一个内置 match "icmp",
+     *
+     *      该 match 的目的是匹配 icmp 包，用后续的 target 进行相关处理
+     * *********************************************************************/
 	ret = xt_register_matches(ipt_builtin_mt, ARRAY_SIZE(ipt_builtin_mt));
 	if (ret < 0)
 		goto err4;
 
-	/* Register setsockopt */
+	/* ***********************************************************
+     *
+     * Register setsockopt 
+     *
+     * 这儿注册了一些用户程序用的 setsockopt/getsockopt
+     * 选项，一般而言用户程序不会直接使用这些选项，不过
+     * 可以研究一下如何使用，以备不时只需
+     * **********************************************************/
 	ret = nf_register_sockopt(&ipt_sockopts);
 	if (ret < 0)
 		goto err5;

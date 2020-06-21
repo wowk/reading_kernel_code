@@ -288,10 +288,12 @@ static inline int ip_rcv_finish(struct sk_buff *skb)
 	struct net_device *dev = skb->dev;
 	struct iphdr *iph = skb->nh.iph;
 
-	/*
+	/* ****************************************************************
 	 *	Initialise the virtual path cache for the packet. It describes
 	 *	how the packet travels inside Linux networking.
-	 */ 
+	 *
+	 *	路由查询，以决定这个包是向上传递还是转发
+	 ******************************************************************/ 
 	if (skb->dst == NULL) {
 		if (ip_route_input(skb, iph->daddr, iph->saddr, iph->tos, dev))
 			goto drop; 
@@ -308,6 +310,10 @@ static inline int ip_rcv_finish(struct sk_buff *skb)
 	}
 #endif
 
+	/*********************************************
+	 * 如果 IP 包有 IP Options，则
+	 * 对 Options 进行处理，暂时不关系
+	 * *******************************************/
 	if (iph->ihl > 5) {
 		struct ip_options *opt;
 
@@ -346,6 +352,9 @@ static inline int ip_rcv_finish(struct sk_buff *skb)
 		}
 	}
 
+	/***********************************
+	 * 向外转发/向上传递
+	 * *********************************/
 	return dst_input(skb);
 
 inhdr_error:
@@ -362,22 +371,37 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt)
 {
 	struct iphdr *iph;
 
-	/* When the interface is in promisc. mode, drop all the crap
+	/* 混杂模式中可能会有别的包到达这里，直接丢弃，不用关注
+	 * 混杂模式下收到别的HOST的包会在L2直接被用户程序接收的
+	 * When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
 	 */
 	if (skb->pkt_type == PACKET_OTHERHOST)
 		goto drop;
 
+	/* 更新统计信息*/
 	IP_INC_STATS_BH(IPSTATS_MIB_INRECEIVES);
 
+	/******************************************************
+	 * 如果是共享 skb，则返回一个clone，如果不是，则返回
+	 * 如果clone失败，则返回 NULL
+	 * ****************************************************/
 	if ((skb = skb_share_check(skb, GFP_ATOMIC)) == NULL) {
 		IP_INC_STATS_BH(IPSTATS_MIB_INDISCARDS);
 		goto out;
 	}
 
+	/******************************************************
+	 * skb 的是分片且其长度小于最小ip包长度，则尝试将
+	 * 其他分片中的数据复制进来
+	 * ****************************************************/
 	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
 		goto inhdr_error;
 
+
+	/**************************************
+	 * 对 IP 头进行一些基础性的检查
+	 * ************************************/
 	iph = skb->nh.iph;
 
 	/*
@@ -418,6 +442,9 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt)
 		}
 	}
 
+	/********************************************
+	 * 过 PREROUTING 表，然后进行第二阶段的rcv处理
+	 * ******************************************/
 	return NF_HOOK(PF_INET, NF_IP_PRE_ROUTING, skb, dev, NULL,
 		       ip_rcv_finish);
 

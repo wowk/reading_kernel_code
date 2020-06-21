@@ -442,14 +442,20 @@ bool br_allowed_ingress(const struct net_bridge *br,
 			struct net_bridge_vlan_group *vg, struct sk_buff *skb,
 			u16 *vid)
 {
-	/* If VLAN filtering is disabled on the bridge, all packets are
+	/* *************************************************************
+	 * If VLAN filtering is disabled on the bridge, all packets are
 	 * permitted.
-	 */
+	 **************************************************************/
 	if (!br->vlan_enabled) {
 		BR_INPUT_SKB_CB(skb)->vlan_filtered = false;
 		return true;
 	}
 
+	/***************************************************************
+	 * 如果VLAN功能 enable 了，则继续检查
+	 *
+	 * VLAN ID是否可被当前 Bridge Port 接受
+	 * *************************************************************/
 	return __allowed_ingress(vg, br->vlan_proto, skb, vid);
 }
 

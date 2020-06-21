@@ -220,11 +220,6 @@ static inline int nf_hook_thresh(u_int8_t pf, unsigned int hook,
 	 * ***************************************************************************/
 	struct list_head *hook_list = &net->nf.hooks[pf][hook];
 
-
-
-
-
-
 	if (nf_hook_list_active(hook_list, pf, hook)) { // check if hook list is empty
         /* hook list is not empty, go through it */
 		struct nf_hook_state state;

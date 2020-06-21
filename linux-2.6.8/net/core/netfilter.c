@@ -352,6 +352,8 @@ static unsigned int nf_iterate(struct list_head *head,
 	/*
 	 * The caller must not block between calls to this
 	 * function because of risk of continuing from deleted element.
+	 *
+	 * 找到CHAIN list上注册的 CHAIN hook(xxx) 并将skb送进去处理
 	 */
 	list_for_each_continue_rcu(*i, head) {
 		struct nf_hook_ops *elem = (struct nf_hook_ops *)*i;
@@ -515,6 +517,9 @@ int nf_hook_slow(int pf, unsigned int hook, struct sk_buff *skb,
 	skb->nf_debug |= (1 << hook);
 #endif
 
+	/*************************************
+	 * 找到 nf_hook 中的 table CAHIN list
+	 * ***********************************/
 	elem = &nf_hooks[pf][hook];
  next_hook:
 	verdict = nf_iterate(&nf_hooks[pf][hook], &skb, hook, indev,

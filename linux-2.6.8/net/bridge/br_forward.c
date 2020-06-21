@@ -31,6 +31,9 @@ static inline int should_deliver(const struct net_bridge_port *p,
 
 int br_dev_queue_push_xmit(struct sk_buff *skb)
 {
+	/******************************************
+	 * 也不用做啥，直接 dev_queue_xmit 发出去
+	 * ****************************************/
 	if (skb->len > skb->dev->mtu) 
 		kfree_skb(skb);
 	else {
@@ -106,6 +109,10 @@ static void br_flood(struct net_bridge *br, struct sk_buff *skb, int clone,
 	struct net_bridge_port *p;
 	struct net_bridge_port *prev;
 
+	/********************************************
+	 * 如果 SKB 是 clone 的，则重新 clone 一份，
+	 * 并放弃原有的 skb 的所有权
+	 * ******************************************/
 	if (clone) {
 		struct sk_buff *skb2;
 
@@ -119,6 +126,12 @@ static void br_flood(struct net_bridge *br, struct sk_buff *skb, int clone,
 
 	prev = NULL;
 
+	/**********************************************
+	 * 遍历 br 的所有 port， 然后向每个port传递一份
+	 * skb
+	 *
+	 * 此处的 __packet_hook 应该就是 __br_forward
+	 * ********************************************/
 	list_for_each_entry_rcu(p, &br->port_list, list) {
 		if (should_deliver(p, skb)) {
 			if (prev != NULL) {

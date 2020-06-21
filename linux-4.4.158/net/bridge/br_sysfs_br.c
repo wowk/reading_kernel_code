@@ -49,6 +49,12 @@ static ssize_t store_bridge_parm(struct device *d,
 }
 
 
+
+/***********************************************************************
+ * 当switch端口状态发生变化的时候，延迟多长时间才进入转发状态
+ *
+ * 这个用于等待拓扑变化传遍整个网络
+ * *********************************************************************/
 static ssize_t forward_delay_show(struct device *d,
 				  struct device_attribute *attr, char *buf)
 {
@@ -64,6 +70,10 @@ static ssize_t forward_delay_store(struct device *d,
 }
 static DEVICE_ATTR_RW(forward_delay);
 
+
+/***********************************************************************
+ *
+ * *********************************************************************/
 static ssize_t hello_time_show(struct device *d, struct device_attribute *attr,
 			       char *buf)
 {

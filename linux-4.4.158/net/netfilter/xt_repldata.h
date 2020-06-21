@@ -13,6 +13,17 @@
  * } *tbl;
  */
 
+/*************************************************************
+ * hweight32(hook_mask): 使用来计算当前hook_mask中有几个1, 
+ *
+ * nhooks 表示xt_table中的标准CHAIN的数目
+ *
+ * repl->num_entries 则表示标准CHAIN数目加上一个 ipt_error CHAIN
+ *
+ * 而 repl->size 表示所有的标准CHAIN以及error CHAIN所总共
+ * 占用的字节数目
+ *
+ * ***********************************************************/
 #define xt_alloc_initial_table(type, typ2) ({ \
 	unsigned int hook_mask = info->valid_hooks; \
 	unsigned int nhooks = hweight32(hook_mask); \

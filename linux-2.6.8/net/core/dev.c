@@ -1703,8 +1703,21 @@ static inline int __handle_bridge(struct sk_buff *skb,
 			struct packet_type **pt_prev, int *ret)
 {
 #if defined(CONFIG_BRIDGE) || defined(CONFIG_BRIDGE_MODULE)
+	/*********************************************************
+	 * 如果 dev 是一个 brport 且其不是回环设备，则送给bridge
+	 * 模块处理
+	 * *******************************************************/
 	if (skb->dev->br_port && skb->pkt_type != PACKET_LOOPBACK) {
+		/******************************************
+		 * 先将之前 hold 的 pt_prev 处理掉
+		 * ****************************************/
 		*ret = handle_bridge(skb, *pt_prev);
+		
+		/*******************************************
+		 * 现在将其正式送入bridge 模块处理，处理函数
+		 * 为：
+		 *    br_handle_frame
+		 * *****************************************/
 		if (br_handle_frame_hook(skb) == 0)
 			return 1;
 
@@ -1769,14 +1782,35 @@ int netif_receive_skb(struct sk_buff *skb)
 	}
 #endif
 
+	/*******************************************
+	 * 给SKB 打个事件戳
+	 * *****************************************/
 	if (!skb->stamp.tv_sec)
 		net_timestamp(&skb->stamp);
 
+	/*******************************************
+	 * 如果 skb->dev 是某个设备的 slave，则
+	 * 设定 
+	 *		skb->real_dev = skb->dev
+	 *		skb->dev      = dev->master
+	 * *****************************************/
 	skb_bond(skb);
 
+	/********************************************
+	 * 更新 RX 统计信息
+	 * ******************************************/
 	__get_cpu_var(netdev_rx_stat).total++;
 
+	/**********************************************
+	 * 初始化 L3/L4 头的位置
+	 * ********************************************/
 	skb->h.raw = skb->nh.raw = skb->data;
+
+	/***********************************************
+	 * 当前 skb->data 是指向 L3 ？？？
+	 *
+	 * 当前 skb->mac.raw 是由 Driver 设置的 ？？？
+	 * *********************************************/
 	skb->mac_len = skb->nh.raw - skb->mac.raw;
 
 	pt_prev = NULL;
@@ -1788,6 +1822,9 @@ int netif_receive_skb(struct sk_buff *skb)
 	}
  #endif
 
+	/************************************************
+	 * 将 SKB 传递给所有的嗅探器socket
+	 * **********************************************/
 	rcu_read_lock();
 	list_for_each_entry_rcu(ptype, &ptype_all, list) {
 		if (!ptype->dev || ptype->dev == skb->dev) {
@@ -1816,12 +1853,27 @@ int netif_receive_skb(struct sk_buff *skb)
 	skb->tc_verd = 0;
 ncls:
 #endif
-
+    
+	
+	/******************************
+	 * 不清楚这货是干嘛的
+	 * ****************************/
 	handle_diverter(skb);
 
+	/******************************
+	 * 将 skb 传递给 bridge 模块，如果
+	 * bridge模块消费了这个包，那么直接
+	 * 跳出不再处理，bridge 或将这个包
+	 * 重入协议栈
+	 * ****************************/
 	if (__handle_bridge(skb, &pt_prev, &ret))
 		goto out;
 
+
+	/**********************************************
+	 * 根据 skb 的protocol 将其送给指定的协议处理
+	 * 函数处理
+	 * ********************************************/
 	type = skb->protocol;
 	list_for_each_entry_rcu(ptype, &ptype_base[ntohs(type)&15], list) {
 		if (ptype->type == type &&
@@ -1851,6 +1903,9 @@ static int process_backlog(struct net_device *backlog_dev, int *budget)
 {
 	int work = 0;
 	int quota = min(backlog_dev->quota, *budget);
+	/*********************************
+	 * 获取 CPU 的 RX 队列结构
+	 * *******************************/
 	struct softnet_data *queue = &__get_cpu_var(softnet_data);
 	unsigned long start_time = jiffies;
 
@@ -1859,11 +1914,18 @@ static int process_backlog(struct net_device *backlog_dev, int *budget)
 		struct net_device *dev;
 
 		local_irq_disable();
+		/*******************************************
+		 * 从收包队列中取出一个 SKB，如果队列为空，
+		 * 则返回
+		 * *****************************************/
 		skb = __skb_dequeue(&queue->input_pkt_queue);
 		if (!skb)
 			goto job_done;
 		local_irq_enable();
 
+		/*******************************************
+		 * 如果有 SKB，则交由协议栈去处理
+		 * *****************************************/
 		dev = skb->dev;
 
 		netif_receive_skb(skb);
@@ -1871,7 +1933,11 @@ static int process_backlog(struct net_device *backlog_dev, int *budget)
 		dev_put(dev);
 
 		work++;
-
+		
+		/********************************************
+		 * 如果处理了超过 指定最大数量（quato）的包，
+		 * 或者占用了超过1/HZ秒的时间，就放弃停止轮循
+		 * ******************************************/
 		if (work >= quota || jiffies - start_time > 1)
 			break;
 
@@ -1887,6 +1953,7 @@ static int process_backlog(struct net_device *backlog_dev, int *budget)
 #endif
 	}
 
+	
 	backlog_dev->quota -= work;
 	*budget -= work;
 	return -1;
@@ -3278,21 +3345,41 @@ static int __init net_dev_init(void)
 {
 	int i, rc = -ENOMEM;
 
+	/*************************************
+	 * 确定 dev_boot_phase 只在启动时执行
+	 * **********************************/
 	BUG_ON(!dev_boot_phase);
 
+	/*************************************
+	 * 创建某些的 proc
+	 * ***********************************/
 	if (dev_proc_init())
 		goto out;
 
+	/*************************************
+	 * 创建 sysfs 中某些项
+	 * ***********************************/
 	if (netdev_sysfs_init())
 		goto out;
 
+	/*************************************
+	 * 初始化嗅探器链表
+	 * ***********************************/
 	INIT_LIST_HEAD(&ptype_all);
+
+	/*************************************
+	 * 初始化 ptype_base 链表数组
+	 * 该链表维护了kernel支持的L2协议
+	 * 处理模块
+	 * **********************************/
 	for (i = 0; i < 16; i++) 
 		INIT_LIST_HEAD(&ptype_base[i]);
 
+	/* 初始化 dev_name_head HASH table */
 	for (i = 0; i < ARRAY_SIZE(dev_name_head); i++)
 		INIT_HLIST_HEAD(&dev_name_head[i]);
 
+	/* 初始化 dev_index_head HASH table */
 	for (i = 0; i < ARRAY_SIZE(dev_index_head); i++)
 		INIT_HLIST_HEAD(&dev_index_head[i]);
 
@@ -3300,6 +3387,7 @@ static int __init net_dev_init(void)
 	 *	Initialise the packet receive queues.
 	 */
 
+	/* 初始化 CPU RX 队列 */
 	for (i = 0; i < NR_CPUS; i++) {
 		struct softnet_data *queue;
 
@@ -3312,6 +3400,9 @@ static int __init net_dev_init(void)
 		INIT_LIST_HEAD(&queue->poll_list);
 		set_bit(__LINK_STATE_START, &queue->backlog_dev.state);
 		queue->backlog_dev.weight = weight_p;
+		/******************************************
+		 * kernel 提供的轮循接口，由 Driver 来调用
+		 * ****************************************/
 		queue->backlog_dev.poll = process_backlog;
 		atomic_set(&queue->backlog_dev.refcnt, 1);
 	}
@@ -3323,11 +3414,27 @@ static int __init net_dev_init(void)
 
 	dev_boot_phase = 0;
 
+	/*****************************************
+	 * 注册 TX/RX 软中断 处理函数
+	 * ***************************************/
 	open_softirq(NET_TX_SOFTIRQ, net_tx_action, NULL);
 	open_softirq(NET_RX_SOFTIRQ, net_rx_action, NULL);
 
+	/*****************************************
+	 * 注册CPU DEAD 事件处理函数, 用于处理
+	 * CPU DEAD 时其RX队列还存在的SKB
+	 * **************************************/
 	hotcpu_notifier(dev_cpu_callback, 0);
+
+	/****************************************
+	 * 注册 netdev DOWN 时，dst 子系统的
+	 * 事件处理函数
+	 * **************************************/
 	dst_init();
+
+	/****************************************
+	 * 创建 proc  dev_mcast
+	 * **************************************/
 	dev_mcast_init();
 	rc = 0;
 out:

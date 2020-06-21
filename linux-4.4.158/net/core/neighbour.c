@@ -3196,6 +3196,10 @@ static struct neigh_sysctl_table {
 	},
 };
 
+
+/*********************************************************************
+ * 注册proc相关接口，用于在用户空间进行配置
+ * *******************************************************************/
 int neigh_sysctl_register(struct net_device *dev, struct neigh_parms *p,
 			  proc_handler *handler)
 {
@@ -3300,6 +3304,9 @@ EXPORT_SYMBOL(neigh_sysctl_unregister);
 
 static int __init neigh_init(void)
 {
+	/*************************************************************
+	 * 注册rtnetlink相关接口
+	 * **********************************************************/
 	rtnl_register(PF_UNSPEC, RTM_NEWNEIGH, neigh_add, NULL, NULL);
 	rtnl_register(PF_UNSPEC, RTM_DELNEIGH, neigh_delete, NULL, NULL);
 	rtnl_register(PF_UNSPEC, RTM_GETNEIGH, NULL, neigh_dump_info, NULL);

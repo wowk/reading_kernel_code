@@ -569,12 +569,27 @@ static inline int unregister_gifconf(unsigned int family)
 
 struct softnet_data
 {
+    /*********************************
+	 * 这三个参数由拥塞管理算法使用，
+	 * 暂时不考虑
+	 * *******************************/
 	int			throttle;
 	int			cng_level;
 	int			avg_blog;
+
+	/*********************************
+	 * 用来保存入口帧，这些帧还没有
+	 * 被处理
+	 * *******************************/
 	struct sk_buff_head	input_pkt_queue;
+
+
 	struct list_head	poll_list;
+
+
 	struct net_device	*output_queue;
+
+
 	struct sk_buff		*completion_queue;
 
 	struct net_device	backlog_dev;	/* Sorry. 8) */

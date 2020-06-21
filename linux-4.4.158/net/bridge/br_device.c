@@ -30,6 +30,11 @@ EXPORT_SYMBOL_GPL(nf_br_ops);
 
 static struct lock_class_key bridge_netdev_addr_lock_key;
 
+
+/********************************************************************************
+ * 该函数会用来初始化函数指针 ndo_start_xmit, 该函数指针会在 dev_queue_xmit 
+ * 的调用树中用到，用于把包发出去到每个网卡的发包队列中
+ * *****************************************************************************/
 /* net device transmit always called with BH disabled */
 netdev_tx_t br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 {

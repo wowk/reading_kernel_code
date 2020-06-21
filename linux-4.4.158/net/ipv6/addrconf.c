@@ -292,6 +292,11 @@ static void addrconf_mod_dad_work(struct inet6_ifaddr *ifp,
 				   unsigned long delay)
 {
 	in6_ifa_hold(ifp);
+    /********************************************************
+     * 告诉队列 addrconf_wq 当前dad_work准备运行了,在delay
+     * 时间之后便会运行任务
+     * (其回调函数目前是 addrconf_dad_work)
+     * ******************************************************/
 	if (mod_delayed_work(addrconf_wq, &ifp->dad_work, delay))
 		in6_ifa_put(ifp);
 }
@@ -953,6 +958,11 @@ ipv6_add_addr(struct inet6_dev *idev, const struct in6_addr *addr,
 		ifa->peer_addr = *peer_addr;
 
 	spin_lock_init(&ifa->lock);
+    /****************************************************************************
+     * DAD是通过work_struct这个数据结构来进行DAD检测，当前初始化一个work_struct
+     * 结构，将其回调函数设置为 addrconf_dad_work, 后续会通过 mod_delayed_work
+     * 来将 work 如队列，后续会被内核自动调度到并且执行
+     * *************************************************************************/
 	INIT_DELAYED_WORK(&ifa->dad_work, addrconf_dad_work);
 	INIT_HLIST_NODE(&ifa->addr_lst);
 	ifa->scope = scope;
@@ -993,6 +1003,12 @@ ipv6_add_addr(struct inet6_dev *idev, const struct in6_addr *addr,
 out2:
 	rcu_read_unlock_bh();
 
+    /**************************************************
+     * 万事OK，开始通知inet6addr通知链上的监听者
+     * NETDEV_UP 事件
+     * 对该事件感兴趣的人会进行处理，此处也就是
+     * addrconf_notify
+     *************************************************/
 	if (likely(err == 0))
 		inet6addr_notifier_call_chain(NETDEV_UP, ifa);
 	else {
@@ -3141,6 +3157,15 @@ static void addrconf_gre_config(struct net_device *dev)
 }
 #endif
 
+
+/********************************************************************************
+ * IPv6 地址配置信息有变化的时候，会调用这个函数，用于响应配置信息的变化并做
+ * 相关的动作。
+ *
+ * 对于IPv6 Address添加的动作，此处会负责做DAD相关的检测，DAD检测完成后，如果
+ * 没有发现重复的地址，则该地址才可以使用
+ *
+ * *****************************************************************************/
 static int addrconf_notify(struct notifier_block *this, unsigned long event,
 			   void *ptr)
 {
@@ -3184,7 +3209,11 @@ static int addrconf_notify(struct notifier_block *this, unsigned long event,
 		run_pending = 1;
 
 		/* fall through */
-
+    
+    /***************************************************************
+     * 添加一个地址后，会有NETDEV_UP动作丢出 (从函数ipv6_add_addr中)
+     * 此处会进行DAD动作
+     * *****************************************************/
 	case NETDEV_UP:
 	case NETDEV_CHANGE:
 		if (dev->flags & IFF_SLAVE)
@@ -3253,6 +3282,9 @@ static int addrconf_notify(struct notifier_block *this, unsigned long event,
 			break;
 		}
 
+        /**********************************************
+         * 开始进行DAD检测
+         * ********************************************/
 		if (!IS_ERR_OR_NULL(idev)) {
 			if (run_pending)
 				addrconf_dad_run(idev);
@@ -3499,17 +3531,24 @@ put:
 
 /*
  *	Duplicate Address Detection
+ *
+ *	正式进行 DAD 的动作
  */
 static void addrconf_dad_kick(struct inet6_ifaddr *ifp)
 {
 	unsigned long rand_num;
 	struct inet6_dev *idev = ifp->idev;
+    
 
 	if (ifp->flags & IFA_F_OPTIMISTIC)
 		rand_num = 0;
 	else
 		rand_num = prandom_u32() % (idev->cnf.rtr_solicit_delay ? : 1);
 
+    /************************************************************
+     * 获取当前的 dad_transmits 设定，后续会做 dad_transmits 次
+     * 的DAD检测，如果都没问题，地址就可以使用了
+     * **********************************************************/
 	ifp->dad_probes = idev->cnf.dad_transmits;
 	addrconf_mod_dad_work(ifp, rand_num);
 }
@@ -3526,9 +3565,18 @@ static void addrconf_dad_begin(struct inet6_ifaddr *ifp)
 
 	read_lock_bh(&idev->lock);
 	spin_lock(&ifp->lock);
+    /***************************************************
+     * 基本状态检查，如果当前状态是DEAD,则跳出
+     * *************************************************/
 	if (ifp->state == INET6_IFADDR_STATE_DEAD)
 		goto out;
 
+    /****************************************************
+     * 如果当前禁止了 DAD 或者当前不需要对地址进行 DAD，
+     * 则直接调用 addrconf_dad_completed 使地址处于可使用
+     * 的状态，该函数一个主要的操作就是吧当前的work_struct
+     * 从 addrconf_wq工作队列中删掉
+     * **************************************************/
 	if (dev->flags&(IFF_NOARP|IFF_LOOPBACK) ||
 	    idev->cnf.accept_dad < 1 ||
 	    !(ifp->flags&IFA_F_TENTATIVE) ||
@@ -3537,10 +3585,18 @@ static void addrconf_dad_begin(struct inet6_ifaddr *ifp)
 		spin_unlock(&ifp->lock);
 		read_unlock_bh(&idev->lock);
 
+        /********************************************************
+         * 成功完成DAD检测，删除相应的 work_struct
+         ********************************************************/ 
 		addrconf_dad_completed(ifp);
 		return;
 	}
 
+
+    /*******************************************************
+     * 如果当前的 interface 不是 READY的状态，则
+     * 不要进行DAD检测
+     * *****************************************************/
 	if (!(idev->if_flags & IF_READY)) {
 		spin_unlock(&ifp->lock);
 		read_unlock_bh(&idev->lock);
@@ -3567,7 +3623,10 @@ static void addrconf_dad_begin(struct inet6_ifaddr *ifp)
 			notify = true;
 		}
 	}
-
+    
+    /********************************************************
+     * 该检查的都检查完了，开始发送 DAD NS 包
+     * ******************************************************/
 	addrconf_dad_kick(ifp);
 out:
 	spin_unlock(&ifp->lock);
@@ -3591,6 +3650,10 @@ static void addrconf_dad_start(struct inet6_ifaddr *ifp)
 		addrconf_mod_dad_work(ifp, 0);
 }
 
+
+/********************************************************************************
+ * DAD检测的 work_struct 回调函数
+ * *****************************************************************************/
 static void addrconf_dad_work(struct work_struct *w)
 {
 	struct inet6_ifaddr *ifp = container_of(to_delayed_work(w),
@@ -3609,26 +3672,60 @@ static void addrconf_dad_work(struct work_struct *w)
 
 	spin_lock_bh(&ifp->lock);
 	if (ifp->state == INET6_IFADDR_STATE_PREDAD) {
+        /**************************************
+         * DAD检测首先转换到STATE_DAD 状态，
+         * 在 DAD_BEGIN 动作中，只是会进行
+         * 基本的检测，来决定是否需要真的进行
+         * DAD检测，这只是一个必要性检查的动作
+         * 检查完成后会直接调用
+         * addrconf_dad_kick 来调度work_struct
+         * 再次执行，也就会再次进入当前函数，
+         * 不过此时的action 就变成了
+         *      DAD_PROCESS
+         * 这时候就会正式的开始发包
+         * ************************************/
 		action = DAD_BEGIN;
 		ifp->state = INET6_IFADDR_STATE_DAD;
 	} else if (ifp->state == INET6_IFADDR_STATE_ERRDAD) {
+        /****************************************
+         * 如果后续再次进行DAD动作的时候发现出错，
+         * 则将状态转换成 STATE_POSTDAD
+         * *************************************/
 		action = DAD_ABORT;
+        /***************************
+         * POSTDAD 表示 DAD过程结束
+         * *************************/
 		ifp->state = INET6_IFADDR_STATE_POSTDAD;
 	}
 	spin_unlock_bh(&ifp->lock);
 
 	if (action == DAD_BEGIN) {
+        /**************************************
+         * 发DAD包前的基本检查
+         * ************************************/
 		addrconf_dad_begin(ifp);
 		goto out;
 	} else if (action == DAD_ABORT) {
+        /**************************************
+         * 如果遇到错误，则终止DAD过程, 并且如果
+         * 必要则删除地址(如果是permanent地址则
+         * 不需要删除)
+         * ************************************/
 		in6_ifa_hold(ifp);
 		addrconf_dad_stop(ifp, 1);
 		goto out;
 	}
 
+    /*************************************************
+     * 判断有没有到达 dad_transmits 上限
+     * 到达上限的话直接结束
+     * ***********************************************/
 	if (!ifp->dad_probes && addrconf_dad_end(ifp))
 		goto out;
 
+    /*************************************************
+     * 这儿基本都是一些重复性的基本检查操作
+     * ***********************************************/
 	write_lock_bh(&idev->lock);
 	if (idev->dead || !(idev->if_flags & IF_READY)) {
 		write_unlock_bh(&idev->lock);
@@ -3642,6 +3739,11 @@ static void addrconf_dad_work(struct work_struct *w)
 		goto out;
 	}
 
+    
+    /**************************************************
+     * 如果DAD次数到达上限，则确定该地址可用，则
+     * 此处调用 addrconf_dad_completed 删除work_struct
+     * ************************************************/
 	if (ifp->dad_probes == 0) {
 		/*
 		 * DAD was successful
@@ -3656,13 +3758,18 @@ static void addrconf_dad_work(struct work_struct *w)
 		goto out;
 	}
 
+    /**************************************************
+     * 如果还没达到上限，则 RETRANS_TIME 后继续检测
+     * ************************************************/
 	ifp->dad_probes--;
 	addrconf_mod_dad_work(ifp,
 			      NEIGH_VAR(ifp->idev->nd_parms, RETRANS_TIME));
 	spin_unlock(&ifp->lock);
 	write_unlock_bh(&idev->lock);
 
-	/* send a neighbour solicitation for our addr */
+	/* send a neighbour solicitation for our addr 
+     *
+     * DAD包发出去*/
 	addrconf_addr_solict_mult(&ifp->addr, &mcaddr);
 	ndisc_send_ns(ifp->idev->dev, &ifp->addr, &mcaddr, &in6addr_any);
 out:
@@ -3694,16 +3801,27 @@ static void addrconf_dad_completed(struct inet6_ifaddr *ifp)
 	struct in6_addr lladdr;
 	bool send_rs, send_mld;
 
-	addrconf_del_dad_work(ifp);
+	/***********************************************
+     * 成功完成，则首先删除 work_struct
+     * *********************************************/
+    addrconf_del_dad_work(ifp);
 
 	/*
 	 *	Configure the address for reception. Now it is valid.
 	 */
-
+    /*************************************************************
+     * 然后广播netlink消息告诉用户进程，当前第一已经可用了
+     *
+     * 可以通过 ip monitor address 来验证这一点
+     *************************************************************/
 	ipv6_ifa_notify(RTM_NEWADDR, ifp);
 
 	/* If added prefix is link local and we are prepared to process
 	   router advertisements, start sending router solicitations.
+
+       如果当前添加的地址是 link local 地址且是当前interface上的唯一
+       linklocal地址，并且当前accept_ra已经使能，那么就立即发送一个RS来尝试
+       请求一个无状态地址
 	 */
 
 	read_lock_bh(&ifp->idev->lock);
@@ -3748,6 +3866,10 @@ static void addrconf_dad_run(struct inet6_dev *idev)
 	read_lock_bh(&idev->lock);
 	list_for_each_entry(ifp, &idev->addr_list, if_list) {
 		spin_lock(&ifp->lock);
+        /********************************************************
+         * 当前地址ASSIGN的时候，在没做DAD检测并且没指定nodad
+         * 的时候，则进行DAD检测
+         * ******************************************************/
 		if (ifp->flags & IFA_F_TENTATIVE &&
 		    ifp->state == INET6_IFADDR_STATE_DAD)
 			addrconf_dad_kick(ifp);

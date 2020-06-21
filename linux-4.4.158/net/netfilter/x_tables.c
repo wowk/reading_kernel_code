@@ -1589,6 +1589,16 @@ int xt_proto_init(struct net *net, u_int8_t af)
 
 
 #ifdef CONFIG_PROC_FS
+    /***************************************************************
+     * 创建 /proc/net/ 下的与 netfilter 相关的 proc  "*_tables_names"
+     * 这些 proc 用于让用户查看当前 支持的所有tables
+     *
+     *      对于 IPv4, 文件是 "ip_tables_names"     , 由iptables使用
+     *      对于 IPv6, 文件是 "ip6_tables_names"    , 由ip6tables使用
+     *      对于 ARP,  文件是 "arp_tables_names"    , 由arptables使用
+     *      对于 BRIDGE, 文件是 "eb_tables_names"   , 由ebtables使用
+     * 
+     * *************************************************************/
 	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_TABLES, sizeof(buf));
 	proc = proc_create_data(buf, 0440, net->proc_net, &xt_table_ops,
@@ -1596,6 +1606,14 @@ int xt_proto_init(struct net *net, u_int8_t af)
 	if (!proc)
 		goto out;
 
+    /****************************************************************
+     * 创建 /proc/net/ 下的与 netfilter 相关的 proc "*_tables_matches"
+     * 该 proc 显示当前的 iptables/ip6tables/arptables/ebtables 中
+     * 已经加载的匹配模块
+     *
+     * 之前的 ip_build_mt 表示的是一个内置的匹配模块 icmp
+     *
+     * **************************************************************/
 	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_MATCHES, sizeof(buf));
 	proc = proc_create_data(buf, 0440, net->proc_net, &xt_match_ops,
@@ -1603,6 +1621,12 @@ int xt_proto_init(struct net *net, u_int8_t af)
 	if (!proc)
 		goto out_remove_tables;
 
+    /*****************************************************************
+     * 创建 /proc/net/ 下的与 netfilter 相关的 proc "*_tables_targets"
+     * 这些 proc 用于让用户查看当前当前加载的 targets 模块
+     * "-j" 参数指定
+     *
+     * ***************************************************************/
 	strlcpy(buf, xt_prefix[af], sizeof(buf));
 	strlcat(buf, FORMAT_TARGETS, sizeof(buf));
 	proc = proc_create_data(buf, 0440, net->proc_net, &xt_target_ops,
