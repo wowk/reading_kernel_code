@@ -312,6 +312,10 @@ ipt_do_table(struct sk_buff *skb,
 	 * things we don't know, ie. tcp syn flag or ports).  If the
 	 * rule is also a fragment-specific rule, non-fragments won't
 	 * match it. */
+
+    /***************************************************
+     * acpar 表示 action parameters
+     * *************************************************/
 	acpar.fragoff = ntohs(ip->frag_off) & IP_OFFSET;
 	acpar.thoff   = ip_hdrlen(skb);
 	acpar.hotdrop = false;
@@ -362,7 +366,7 @@ ipt_do_table(struct sk_buff *skb,
 
 		IP_NF_ASSERT(e);
         /**************************************************
-         * 这儿应该是标准的match动作
+         * 这儿应该是rule entry中标准的match动作
          * ***********************************************/
 		if (!ip_packet_match(ip, indev, outdev,
 		    &e->ip, acpar.fragoff)) {
@@ -372,7 +376,7 @@ ipt_do_table(struct sk_buff *skb,
 		}
 
         /**************************************************
-         * 这儿应该是模块的 match 动作, 可以指定多个
+         * 这儿应该是模块的 match 动作（如果有的话）, 可以指定多个
          * 匹配模块，这地方是 foreach 循环，可以看出
          * 是支持多个模块匹配的
          *
@@ -759,14 +763,21 @@ static bool check_underflow(const struct ipt_entry *e)
 	return verdict == NF_DROP || verdict == NF_ACCEPT;
 }
 
+
+/***************************************************
+struct ipt_standard {
+	struct ipt_entry entry;
+	struct xt_standard_target target;
+};
+****************************************************/
 static int
-check_entry_size_and_hooks(struct ipt_entry *e,
-			   struct xt_table_info *newinfo,
-			   const unsigned char *base,
-			   const unsigned char *limit,
-			   const unsigned int *hook_entries,
-			   const unsigned int *underflows,
-			   unsigned int valid_hooks)
+check_entry_size_and_hooks(struct ipt_entry *e,    //遍历过程中遍历器指针，只想一个ipt_standard
+			   struct xt_table_info *newinfo,      //xt_table_info
+			   const unsigned char *base,          //所有entry的起始地址
+			   const unsigned char *limit,         //所有entry的结束地址
+			   const unsigned int *hook_entries,   //repl->hook_entries[]，ipt_replace中的hook_entries
+			   const unsigned int *underflows,     //repl->underflows[]，ipt_replace中的underflows
+			   unsigned int valid_hooks)           //table中有效的CHAINs
 {
 	unsigned int h;
 	int err;
@@ -788,6 +799,9 @@ check_entry_size_and_hooks(struct ipt_entry *e,
 	if (!ip_checkentry(&e->ip))
 		return -EINVAL;
 
+    /******************************************************************
+     * 
+     * ****************************************************************/
 	err = xt_check_entry_offsets(e, e->elems, e->target_offset,
 				     e->next_offset);
 	if (err)
@@ -838,8 +852,13 @@ cleanup_entry(struct ipt_entry *e, struct net *net)
 	xt_percpu_counter_free(&e->counters);
 }
 
-/* Checks and translates the user-supplied table segment (held in
-   newinfo) */
+/* ****************************************************************************
+ * 用于将用户提供的 ipt_replace rules 拷贝到 xt_table_info 中
+ *
+ * 在内核初始化的时候也会使用ipt_replace来初始化，也会调用到这个函数
+ * Checks and translates the user-supplied table segment (held in
+   newinfo) 
+ * ****************************************************************************/
 static int
 translate_table(struct net *net, struct xt_table_info *newinfo, void *entry0,
 		const struct ipt_replace *repl)
@@ -853,18 +872,46 @@ translate_table(struct net *net, struct xt_table_info *newinfo, void *entry0,
 	newinfo->size = repl->size;
 	newinfo->number = repl->num_entries;
 
-	/* Init all hooks to impossible value. */
+	/*********************************************************** 
+     * Init all hooks to impossible value. 
+     * 
+     * hook_entry的索引如下
+	 *      NF_INET_PRE_ROUTING,
+     *   	NF_INET_LOCAL_IN,
+     *   	NF_INET_FORWARD,
+     *   	NF_INET_LOCAL_OUT,
+     *   	NF_INET_POST_ROUTING,
+     *  也就是说，hook_entry[x] 存放了CHAIN x中rules
+     *  的起始位置，而 underflow[x] 存放了CHAINx中rules
+     *  的结束地址
+     *
+     *  并不是每个表都有上述的五个CHAIN,
+     *  所以表中没有的CHAIN在 hook_entry 和 underflow中的值都是
+     *  初始值 0xFFFFFFFF，表示此项无效
+     * *********************************************************/
 	for (i = 0; i < NF_INET_NUMHOOKS; i++) {
 		newinfo->hook_entry[i] = 0xFFFFFFFF;
 		newinfo->underflow[i] = 0xFFFFFFFF;
 	}
 
+
+    /*********************************************************
+     * 申请一个数组用于存放每个 CHAIN 所在起始偏移
+     * *******************************************************/
 	duprintf("translate_table: size %u\n", newinfo->size);
 	offsets = xt_alloc_entry_offsets(newinfo->number);
 	if (!offsets)
 		return -ENOMEM;
+
 	i = 0;
-	/* Walk through entries, checking offsets. */
+    /* Walk through entries, checking offsets. 
+     * entry0: 指向 ipt_replace后面的 entries[0] 
+     *
+     * 基本检查动作，这个不需要太深入
+     *
+     *
+     * 这个地方所做的操作基本上就是检查 ipt_replace中hook_entry 和 underflows
+     * 的合法性并且将其拷贝到 newinfo 中*/
 	xt_entry_foreach(iter, entry0, newinfo->size) {
 		ret = check_entry_size_and_hooks(iter, newinfo, entry0,
 						 entry0 + repl->size,
@@ -890,7 +937,9 @@ translate_table(struct net *net, struct xt_table_info *newinfo, void *entry0,
 
 	/* Check hooks all assigned */
 	for (i = 0; i < NF_INET_NUMHOOKS; i++) {
-		/* Only hooks which are valid */
+		/* Only hooks which are valid 
+         * 仅检查当前表中存在的标准CHAIN
+         * */
 		if (!(repl->valid_hooks & (1 << i)))
 			continue;
 		if (newinfo->hook_entry[i] == 0xFFFFFFFF) {
@@ -905,6 +954,9 @@ translate_table(struct net *net, struct xt_table_info *newinfo, void *entry0,
 		}
 	}
 
+    /*********************************************************************
+     * 检查规则是否会导致死循环，如果是，则不能继续
+     * *******************************************************************/
 	if (!mark_source_chains(newinfo, repl->valid_hooks, entry0, offsets)) {
 		ret = -ELOOP;
 		goto out_free;
@@ -1979,6 +2031,9 @@ struct xt_table *ipt_register_table(struct net *net,
     /***********************************************************
      * 申请一个内存空间，其包含一个 xt_table_info 对象，以及
      * 后面跟着一块内存，可以包含表中所有的CHAIN
+     *
+     * 所有的rules都会从ipt_replace拷贝到 xt_table_info 中
+     * 关于 ipt_replace 的解释可以在 iptable_filter_net_init 中找到
      * *********************************************************/
 	newinfo = xt_alloc_table_info(repl->size);
 	if (!newinfo) {
@@ -1993,14 +2048,15 @@ struct xt_table *ipt_register_table(struct net *net,
      * 2020/06/21
      * entries成员的定义是 entries[0],
      *
-     * newinfo->entries 正好指向 CHAINs 结构所在的结构
+     * newinfo->entries 正好指向 CHAINs 结构所在的位置
      * *********************************************************/
 	loc_cpu_entry = newinfo->entries;
 	memcpy(loc_cpu_entry, repl->entries, repl->size);
 
     /************************************************
-     * 将 offset[xx] 也拷贝到 xt_table_info 中，用于
-     * 获取 target 的偏移
+     *
+     * 该函数将ipt_replace中的rules都拷贝到newinfo中
+     *
      * **********************************************/
 	ret = translate_table(net, newinfo, loc_cpu_entry, repl);
 	if (ret != 0)
@@ -2182,6 +2238,9 @@ static int __init ip_tables_init(void)
      *      该处目的是添加一个内置的target "ERROR"，
      *
      *      该 target 和 NFLOG/LOG 等target类似 （在iptables中 -j 参数指定）
+     *
+     * 2020/06/21
+     *      试了一下， ERROR这个target似乎在iptables中用不了
      * *********************************************************************/
 	ret = xt_register_targets(ipt_builtin_tg, ARRAY_SIZE(ipt_builtin_tg));
 	if (ret < 0)
@@ -2189,12 +2248,15 @@ static int __init ip_tables_init(void)
 
     /***********************************************************************
      * FIXME:
-     * 注册一个标准的 match，其内部是在匹配 icmp，其目的是什么
+     * 注册一个内置的match， 用于匹配icmp包
      *
      * 2020/06/21
      *      该处的目的是添加一个内置 match "icmp",
      *
      *      该 match 的目的是匹配 icmp 包，用后续的 target 进行相关处理
+     *
+     * 2020/06/22
+     *      这只是一个match，用于匹配icmp包，需要通过添加iptables规则使用
      * *********************************************************************/
 	ret = xt_register_matches(ipt_builtin_mt, ARRAY_SIZE(ipt_builtin_mt));
 	if (ret < 0)
@@ -2207,6 +2269,22 @@ static int __init ip_tables_init(void)
      * 这儿注册了一些用户程序用的 setsockopt/getsockopt
      * 选项，一般而言用户程序不会直接使用这些选项，不过
      * 可以研究一下如何使用，以备不时只需
+     *
+     * 2020/06/22
+     * 此处的setsockopt/getsockopt是供iptables使用，用于
+     * 创建/添加/删除/列出 iptables规则
+     *
+     * do_ipt_set_ctl
+     * 在创建/添加/删除的时候，步骤如下:
+     *      1. 使用 IPT_SO_GET_ENTRIES 获取当前所有的entries
+     *      2. 对entries列表进行修改
+     *      3. 使用 IPT_SO_SET_REPLACE 把修改好的 entries 传给kernel
+     *      4. IPT_SO_SET_ADD_COUNTERS 设置计数器
+     *
+     * do_ipt_get_ctl
+     * 在显示的时候，步骤如下:
+     *      1. 使用 IPT_SO_GET_ENTRIES 获取当前所有的entries
+     *      2. 显示出来
      * **********************************************************/
 	ret = nf_register_sockopt(&ipt_sockopts);
 	if (ret < 0)

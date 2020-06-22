@@ -1180,7 +1180,10 @@ struct xt_table *xt_register_table(struct net *net,
 	struct xt_table_info *private;
 	struct xt_table *t, *table;
 
-	/* Don't add one object to multiple lists. */
+	/* Don't add one object to multiple lists. 
+     * 复制一个 input_table 以便加入到net->xt.tables[af].list链表中
+     * 这样我们就可以找到相应的表了
+     * */
 	table = kmemdup(input_table, sizeof(struct xt_table), GFP_KERNEL);
 	if (!table) {
 		ret = -ENOMEM;
@@ -1199,6 +1202,9 @@ struct xt_table *xt_register_table(struct net *net,
 	/* Simplifies replace_table code. */
 	table->private = bootstrap;
 
+    /***************************************************
+     * 将newinfo中的所有rules加入到 table中
+     * *************************************************/
 	if (!xt_replace_table(table, 0, newinfo, &ret))
 		goto unlock;
 
@@ -1207,7 +1213,10 @@ struct xt_table *xt_register_table(struct net *net,
 
 	/* save number of initial entries */
 	private->initial_entries = private->number;
-
+    
+    /**************************************************
+     * 正式追加到table list中
+     * ************************************************/
 	list_add(&table->list, &net->xt.tables[table->af]);
 	mutex_unlock(&xt[table->af].mutex);
 	return table;

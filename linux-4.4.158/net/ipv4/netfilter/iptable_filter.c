@@ -77,6 +77,9 @@ iptable_filter_hook(void *priv, struct sk_buff *skb,
 		/* root is playing with raw sockets. */
 		return NF_ACCEPT;
 
+    /*******************************************
+     * 遍历所有的rule
+     * ****************************************/
 	return ipt_do_table(skb, state, state->net->ipv4.iptable_filter);
 }
 
@@ -88,10 +91,43 @@ module_param(forward, bool, 0000);
 
 static int __net_init iptable_filter_net_init(struct net *net)
 {
+    /*************************************************************
+     * 关于为什么这个结构叫 ipt_replace, 解释如下:
+     *
+     *      ipt_replace这个名称和用户程序iptables有关系，
+     *      iptables添加删除rules的时候，其做法不是一次
+     *      添加或者删除一条，而是每次先获取所有的rules，
+     *      然后对这些rules进行添加或者附加或者删除，
+     *      在用户空间处理完后，生成了一个新的列表。
+     *      生成后的列表会通过 IPT_SO_SET_REPLACE 传递给
+     *      用户空间，替换掉用户空间的所有rules，这样
+     *      就完成了iptables rules的添加/删除操作.
+     *
+     *      也就是说，整个过程可以总结为三步：
+     *          1. 获取
+     *          2. 修改
+     *          3. 替换(名称的由来)
+     *
+     * ===========================================================
+     * 此处是在内核中添加初始化entries，但是其动作其实和用户空间
+     * 添加是相似的，也是一个替换的过程，只不过这些entries不是从
+     * 内核中过去的，而是直接创建了几条entries，然后直接设置到
+     * tables中，其实也算是一个替换空表的过程了
+     *
+     * ===========================================================
+     * 另外，需要注意的是，关于 ipt_replace，其实rules并不是存放在
+     * ipt_replace这个结构中，其只是作为一个header，在内存中的布局
+     * 大概如下:
+     *      ipt_replace
+     *      ipt_standard
+     *      ......
+     *      ipt_standard
+     *      ipt_error
+     * ***********************************************************/
 	struct ipt_replace *repl;
     
     /*************************************************************
-     * 申请一个 table 对象, 并且初始化，其中细节暂时不深究，
+     * 申请一个ipt_replace 对象空间
      * 基本上就是 kalloc 一个如下对象：
      *   struct {
 	 *      struct type##_replace repl;
@@ -104,6 +140,18 @@ static int __net_init iptable_filter_net_init(struct net *net)
      *
      * 如上类型的对象，但是返回的数据被强制转换为了 
      *          ipt_replace* 类型
+     *
+     * ===========================================================
+     * 2020/06/22
+     *  解释下动作具体做了啥:
+     *      1. 通过 hweight32(valid_hooks) 获取valid_hooks中的个数，
+     *      也就是filter表中的标准CHAINS(INPUT/FORWARD/OUTPUT)的个数(此处也就是3)
+     *      再加上一个 opt_error, 就是4个了。如此以来，申请的对象的布局如下：
+     *          ipt_replace
+     *          ipt_standard    INPUT chain
+     *          ipt_standard    FORWARD chain (此处也解释了下面(struct ipt_standard*)repl->entries)[1]的由来，其指向的正好是FORWARD对象)
+     *          ipt_standard    OUTPUT chain
+     *          ipt_error       ERROR target
      * ***********************************************************/
 	repl = ipt_alloc_initial_table(&packet_filter);
 	if (repl == NULL)
@@ -167,7 +215,8 @@ static int __init iptable_filter_init(void)
 		return ret;
 
 	/* Register hooks 
-     *
+     * 对filter表的遍历与hook函数 iptable_filter_hook 关联，
+     * 遍历filter表的每个entry都会调用该hook
      * 
      * */
 	filter_ops = xt_hook_link(&packet_filter, iptable_filter_hook);
