@@ -102,6 +102,9 @@ struct ipt_ip {
    parts which are 1) general IP header stuff 2) match specific
    stuff 3) the target to perform if the rule matches */
 struct ipt_entry {
+    /*******************************************************
+     * 通用IPv4头的匹配
+     * *****************************************************/
 	struct ipt_ip ip;
 
 	/* Mark with fields that we care about. */

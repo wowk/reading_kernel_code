@@ -29,7 +29,20 @@ extern struct xt_table *ipt_register_table(struct net *net,
 					   const struct ipt_replace *repl);
 extern void ipt_unregister_table(struct net *net, struct xt_table *table);
 
-/* Standard entry. */
+/* Standard entry. 
+ * 需要注意的是，虽然当前数据结构定义成这个样子，
+ * 但是不会直接去使用这个数据结构，因为 ipt_standard->entry
+ * 这个成员是动态大小，其中可以包含0个到多个match，所以如果
+ * 直接使用这个结构的时候，可能会出现target偏移不对的情况,
+ * 
+ * 所以，要找到target的偏移，要使用ipt_entry.target_offset
+ * 这个成员，这个成员存放了target 的实际偏移
+ *
+ * 此处这样定义有两个目的：
+ *  1. 为了代码可读性
+ *  2. 用于 CHAIN 的默认策略，默认策略没有match，所以当前
+ *     的结构可以直接使用，比如在filter表中，FORWARD表的策略设置就是直接使用了这个结构
+ * */
 struct ipt_standard {
 	struct ipt_entry entry;
 	struct xt_standard_target target;

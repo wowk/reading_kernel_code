@@ -292,6 +292,12 @@ unsigned int nf_iterate(struct list_head *head,
 	/*
 	 * The caller must not block between calls to this
 	 * function because of risk of continuing from deleted element.
+     *
+     * 此处的 head 就是 net->nf.hooks[af][hooknum] 这个链表，
+     * 在本函数的外层可以看到，这样链表遍历的每一项都是一个nf_hook_ops,
+     * 一个 nf_hook_ops 和 一个hooknum关联，并且关联了一个 hook函数，
+     * 在当前版本的内核实现中，hook函数是在每个表初始化的时候设置的，
+     * 与每个hooknum关联
 	 */
 	list_for_each_entry_continue_rcu((*elemp), head, list) {
 		if (state->thresh > (*elemp)->priority)
@@ -300,6 +306,24 @@ unsigned int nf_iterate(struct list_head *head,
 		/* Optimization: we don't need to hold module
 		   reference here, since function can't sleep. --RR */
 repeat:
+        /********************************************************
+         * 举个例子：
+         *  对于IPv4的filter表中的Hook点对应的Hook函数: (可以在iptables_filter.c中找到)
+         *      INPUT:      iptable_filter_hook
+         *      OUTPUT:     iptable_filter_hook
+         *      FORWARD:    iptable_filter_hook
+         *
+         *  对于IPv4的nat表中的Hook点对应的Hook函数:    (可以在iptables_nat.c中找到)
+         *      INPUT:      iptable_nat_ipv4_fn
+         *      OUTPUT:     iptable_nat_ipv4_local_fn
+         *      PREROUTING: iptable_nat_ipv4_in
+         *      POSTROUTING:iptable_nat_ipv4_out
+         *
+         * 到此为止，netfilter 基本框架算是清晰了
+         *
+         * FIXME:
+         * 还有一个疑问就是 ERROR target到底是什么时候会添加
+         * ******************************************************/
 		verdict = (*elemp)->hook((*elemp)->priv, skb, state);
 		if (verdict != NF_ACCEPT) {
 #ifdef CONFIG_NETFILTER_DEBUG

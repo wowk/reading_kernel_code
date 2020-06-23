@@ -2043,6 +2043,21 @@ struct xt_table *ipt_register_table(struct net *net,
 
     /***********************************************************
      * 将 ipt_replace 中的内容都copy到 xt_table_info
+     * 当前的iptable在内存中的布局如下:
+     *      
+     *      ipt_replace
+     *      ipt_standard[0]
+     *      ipt_standard[1]
+     *      ......
+     *      ipt_standard[n]
+     *      ipt_error
+     *
+     * 此处的repl->size 是ipt_standard group 和 ipt_error的大小的和
+     *
+     * repl->entries 是利用零数组的语法糖，让其直接指向
+     * ipt_standard group的起始地址
+     *
+     * 将 ipt_replace 中的默认规则都copy到 xt_table_info
      * 中 （复制修改回写）
      * 
      * 2020/06/21

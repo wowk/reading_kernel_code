@@ -457,12 +457,18 @@ static int __init nf_conntrack_l3proto_ipv4_init(void)
 	need_conntrack();
 	nf_defrag_ipv4_enable();
 
+    /******************************************************************
+     * 注册一个 sockopt SO_ORIGINAL_DST, 用来获取/设置 conntrack 的 dst
+     * ****************************************************************/
 	ret = nf_register_sockopt(&so_getorigdst);
 	if (ret < 0) {
 		printk(KERN_ERR "Unable to register netfilter socket option\n");
 		return ret;
 	}
 
+    /*******************************************************************
+     * 注册
+     * *****************************************************************/
 	ret = register_pernet_subsys(&ipv4_net_ops);
 	if (ret < 0) {
 		pr_err("nf_conntrack_ipv4: can't register pernet ops\n");
@@ -471,7 +477,7 @@ static int __init nf_conntrack_l3proto_ipv4_init(void)
 
     /*************************************************************
      * ipv4 conntrack 机制也是通过各个CHAIN来实现的，
-     * conntrack 模块加载是会添加几条优先级最高的规则，
+     * conntrack 模块加载是会添加几条优先级非常高的规则，
      * 来供 conntrack 模块使用。
      *
      * Q: 为什么用 iptables 工具显示不了 ？

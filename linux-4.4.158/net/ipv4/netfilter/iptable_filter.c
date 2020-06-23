@@ -79,6 +79,10 @@ iptable_filter_hook(void *priv, struct sk_buff *skb,
 
     /*******************************************
      * 遍历所有的rule
+     *
+     * 注意此处没有用xt->tables中存放的filter table
+     * 指针，而是使用了net->ipv4.iptable_filter，这样
+     * 就避免了查找的动作，这两个指针指向的是一个table对象
      * ****************************************/
 	return ipt_do_table(skb, state, state->net->ipv4.iptable_filter);
 }
@@ -176,6 +180,11 @@ static int __net_init iptable_filter_net_init(struct net *net)
      *
      *
      * 为什么 verdict 要设置为 -NF_ACCEPT-1 而不是 NF_ACCEPT（NF_DROP同） ？？？
+     * 2020/06/22:
+     *      设置为负值是因为 NF_ACCEPT 和 NF_DROP 是默认target，而不是
+     *      用户自定义的target
+     *
+     *
      * ***************************************************************/
 	((struct ipt_standard *)repl->entries)[1].target.verdict =
 		forward ? -NF_ACCEPT - 1 : -NF_DROP - 1;
