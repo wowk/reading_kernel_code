@@ -190,7 +190,9 @@ static inline int nf_hook_thresh(u_int8_t pf, unsigned int hook,
 	 * 从定义可以看出，其就是一个二维链表数组，其每一个元素都是一个链表头
 	 *
 	 * 第一维为 L3 协议类型，如 NFPROTO_ARP, NFPROTO_IPV4, NFPROTO_IPV6,
-	 * (令人意外的是，还存在 NFPROTO_BRIDGE, 应该是为 br_netfilter 准备的 ？？)
+	 * (令人意外的是，还存在 NFPROTO_BRIDGE, 应该是为 br_netfilter 准备的 ？？
+     *  2021/04/05 该协议号是为了在二层中处理三层协议而准备的，ebtables会用到
+     * )
 	 *
 	 * 第二维是 CHAIN 类型，如: 
 	 *         NF_INET_POST_ROUTING,
@@ -208,10 +210,33 @@ static inline int nf_hook_thresh(u_int8_t pf, unsigned int hook,
 	 *           hook_list = &net->nf.hooks[NFPROTO_IPV4][NF_INET_PRE_ROUTING]
 	 * 
 	 *
-	 * 需要注意的是， iptables 中的不同表（nat，mangle，filter）的
+	 * 需要注意的是，iptables 中的不同表（nat，mangle，filter）的
 	 * PRETOUING，INPUT，OUTPUT 等 CHAIN 都是在同一个链表中的，怎么区分
 	 * 在 nf_hook_slow 中讲述
 	 *
+     *
+     * 关于不同表中的相同CHAIN的优先级顺序，是通过xt_table中的一个成员 
+     *           priority 
+     * 来决定的，这个成员的值是枚举类型：enum nf_ip_hook_priorities;
+     * 该枚举类型的定义可以在 include/uapi/linux/netfilter_ipv4.h中找到，
+     * 具体值如下：
+     *      enum nf_ip_hook_priorities {
+	 *          NF_IP_PRI_FIRST             = INT_MIN,
+	 *          NF_IP_PRI_CONNTRACK_DEFRAG  = -400,
+	 *          NF_IP_PRI_RAW               = -300,
+	 *          NF_IP_PRI_SELINUX_FIRST     = -225,
+	 *          NF_IP_PRI_CONNTRACK         = -200,
+	 *          NF_IP_PRI_MANGLE            = -150,
+	 *          NF_IP_PRI_NAT_DST           = -100,
+	 *          NF_IP_PRI_FILTER            = 0,
+	 *          NF_IP_PRI_SECURITY          = 50,
+	 *          NF_IP_PRI_NAT_SRC           = 100,
+	 *          NF_IP_PRI_SELINUX_LAST      = 225,
+	 *          NF_IP_PRI_CONNTRACK_HELPER  = 300,
+	 *          NF_IP_PRI_CONNTRACK_CONFIRM = INT_MAX,
+     *          NF_IP_PRI_LAST              = INT_MAX,
+     *      };
+     * 值越小，优先级越高，在NF_HOOK_THRESH中遍历的时候越先被遍历到
      *
      * tips:
      * 对于 hook_list 链表，其每个元素的类型都是 struct nf_hook_entry
@@ -281,8 +306,8 @@ NF_HOOK_THRESH(uint8_t pf, unsigned int hook, struct net *net, struct sock *sk,
 
 	/**********************************************************************
 	 * 如果包被 ACCEPT 了，则调用相应的处理函数，如：
-	 *       ip_input_finish, ip_finish_output, ip_forward_finish .........
-	 *       ip6_input_finish, ip6_finish_output, ip6_forward_finish ........
+	 *       ip_local_deliver_finish, ip_finish_output, ip_forward_finish .........
+	 *       ip6_local_deliver_finish, ip6_finish_output, ip6_forward_finish ......
 	 *       等等等等
 	 *       （函数名字可能不一定对，但是大差不离，稍后会修正）
 	 * *******************************************************************/
