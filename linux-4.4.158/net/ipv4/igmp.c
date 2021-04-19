@@ -1817,13 +1817,17 @@ static int ip_mc_del1_src(struct ip_mc_list *pmc, int sfmode,
 static int ip_mc_del_src(struct in_device *in_dev, __be32 *pmca, int sfmode,
 			 int sfcount, __be32 *psfsrc, int delta)
 {
-	struct ip_mc_list *pmc;
+	struct ip_mc_list *pmc;``
 	int	changerec = 0;
 	int	i, err;
 
 	if (!in_dev)
 		return -ENODEV;
 	rcu_read_lock();
+    /**********************************************************************
+     * 查看 interface 是否加入了多播组*pmca (我们现在要退出的多播组地址),
+     * 如果没加入就直接返回
+     * ********************************************************************/
 	for_each_pmc_rcu(in_dev, pmc) {
 		if (*pmca == pmc->multiaddr)
 			break;
@@ -2133,10 +2137,21 @@ EXPORT_SYMBOL(ip_mc_join_group);
 static int ip_mc_leave_src(struct sock *sk, struct ip_mc_socklist *iml,
 			   struct in_device *in_dev)
 {
+    /*********************************
+     * 缩写 sf 表示 source filter ???
+     *
+     * 根据处理逻辑来看是这样
+     * *******************************/
 	struct ip_sf_socklist *psf = rtnl_dereference(iml->sflist);
 	int err;
-
+    
 	if (!psf) {
+        /************************************
+         * 如果 source list filter 是空的，则
+         * 说明是 ASM 模式,
+         *
+         * 此时只要离开
+         * **********************************/
 		/* any-source empty exclude case */
 		return ip_mc_del_src(in_dev, &iml->multi.imr_multiaddr.s_addr,
 			iml->sfmode, 0, NULL, 0);
@@ -2576,23 +2591,38 @@ out:
 
 /*
  *	A socket is closing.
- */
+ *
+ *  当一个socket关闭的时候会从函数 inet_close 中
+ *  调用本函数来确定是否要离开多播组，如果离开则
+ *  发送 Leave Report
+ *	*/
 
 void ip_mc_drop_socket(struct sock *sk)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct ip_mc_socklist *iml;
 	struct net *net = sock_net(sk);
-
+    
+    /*******************************
+     * 首先看看 socket 有没有加入
+     * 多播组，如果没有则不必再往
+     * 下走了
+     * ****************************/
 	if (!inet->mc_list)
 		return;
 
 	rtnl_lock();
+    /*********************************************************
+     * 清理socket加入的多播组列表
+     * *******************************************************/
 	while ((iml = rtnl_dereference(inet->mc_list)) != NULL) {
 		struct in_device *in_dev;
 
 		inet->mc_list = iml->next_rcu;
 		in_dev = inetdev_by_index(net, iml->multi.imr_ifindex);
+        /********************************************************
+         * 离开指定的多播组（如果没有其他socket对次多播组感兴趣）
+         * ******************************************************/
 		(void) ip_mc_leave_src(sk, iml, in_dev);
 		if (in_dev)
 			ip_mc_dec_group(in_dev, iml->multi.imr_multiaddr.s_addr);
@@ -2929,6 +2959,10 @@ static int igmp_mcf_seq_open(struct inode *inode, struct file *file)
 			sizeof(struct igmp_mcf_iter_state));
 }
 
+
+/********************************************************
+ * mcf 是 multicast filter 的缩写
+ * ******************************************************/
 static const struct file_operations igmp_mcf_seq_fops = {
 	.owner		=	THIS_MODULE,
 	.open		=	igmp_mcf_seq_open,
@@ -2986,6 +3020,24 @@ static int igmp_netdev_event(struct notifier_block *this,
 	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct in_device *in_dev;
 
+    /*************************************************
+     * 只关心 RESEND_IGMP 事件，也就是说判断是否需要
+     * RESEND 的复杂逻辑并没有在此处实现，而是分散在
+     * 别的地方了，此处所需要做的事情就是重新加入多播
+     * 组
+     *
+     * struct in_device 这个结构中保存这 网卡上 IPv4
+     * 相关的配置信息，其中链表
+     *          ip_mc_list*  mc_list 
+     * 中保存了网卡目前已经加入的多播组，当某处触发
+     * RESEND_IGMP 事件的时候，会重新向这个链表上保存
+     * 的所有多播组发送 Report 消息
+     *
+     * 此处 ip_mc_regoin_groups 就是做这个事情
+     *
+     * 根据 Code 的搜索结果来看，bridge/vlan/driver这
+     * 几个地方会触发 RESEND_IGMP 事件
+     * ***********************************************/
 	switch (event) {
 	case NETDEV_RESEND_IGMP:
 		in_dev = __in_dev_get_rtnl(dev);
@@ -3002,20 +3054,43 @@ static struct notifier_block igmp_notifier = {
 	.notifier_call = igmp_netdev_event,
 };
 
+/*************************************************************
+ *
+ * 初始化IPv4 IGMP模块，该函数会在 ip_init (IPv4模块初始化函数)
+ * 中调用
+ *
+ * ************************************************************/
 int __init igmp_mc_init(void)
 {
 #if defined(CONFIG_PROC_FS)
 	int err;
 
+    /*******************************************************
+     * 1. 注册/删除IGMP相关的proc文件 (igmp, mcfilter 等)
+     * 2. 创建内核socket，用于加入默认多播组 (如224.0.0.1)
+     * *****************************************************/
 	err = register_pernet_subsys(&igmp_net_ops);
 	if (err)
 		return err;
+
+    /*******************************************************
+     * 注册 igmp_notifier 的事件通知处理器到
+     *  netdevice event chain 上
+     *
+     *  当发生net device 相关事件（比如down/up）时，
+     *  igmp模块可以作出相应的响应
+     *
+     *  目前通知器设定的处理函数是 igmp_netdev_event
+     *  ****************************************************/
 	err = register_netdevice_notifier(&igmp_notifier);
 	if (err)
 		goto reg_notif_fail;
 	return 0;
 
 reg_notif_fail:
+    /**********************************************
+     * 如果初始化失败则删除相关的 proc 及 socket
+     * ********************************************/
 	unregister_pernet_subsys(&igmp_net_ops);
 	return err;
 #else

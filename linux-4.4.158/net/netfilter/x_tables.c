@@ -1756,11 +1756,21 @@ static int __init xt_init(void)
 	for_each_possible_cpu(i) {
 		seqcount_init(&per_cpu(xt_recseq, i));
 	}
-
+    
+    /*************************************************************
+     * xt: struct xt_af
+     * 该文件全局变量是一个数组，其中的每个成员对应一个协议类型的表
+     * 如 NFPROTO_IPV4 代表iptables
+     *    NFPROTO_IPV6 代表ip6tables
+     *    .......
+     * ***********************************************************/
 	xt = kmalloc(sizeof(struct xt_af) * NFPROTO_NUMPROTO, GFP_KERNEL);
 	if (!xt)
 		return -ENOMEM;
 
+    /*************************************************************
+     * 初始化xt数组中的每个元素中的锁和链表
+     * ***********************************************************/
 	for (i = 0; i < NFPROTO_NUMPROTO; i++) {
 		mutex_init(&xt[i].mutex);
 #ifdef CONFIG_COMPAT
@@ -1770,6 +1780,16 @@ static int __init xt_init(void)
 		INIT_LIST_HEAD(&xt[i].target);
 		INIT_LIST_HEAD(&xt[i].match);
 	}
+
+    /*************************************************************
+     * 初始化 net->xt.tables[NFPROTO_NUMPROTO] 这个数组, 这个数组
+     * 中的每个元素都是一个 list_head , 链表保存的是每个PROTO中
+     * 存在的table，如：
+     *      net->xt.tables[NFPROTO_IPV4] 这个链表中保存的内容如下：
+     *
+     *          filter->nat->mangle->raw->...->NULL
+     *
+     * ***********************************************************/
 	rv = register_pernet_subsys(&xt_net_ops);
 	if (rv < 0)
 		kfree(xt);

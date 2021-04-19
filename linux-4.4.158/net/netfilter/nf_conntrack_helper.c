@@ -118,12 +118,23 @@ __nf_ct_helper_find(const struct nf_conntrack_tuple *tuple)
 	struct nf_conntrack_helper *helper;
 	struct nf_conntrack_tuple_mask mask = { .src.u.all = htons(0xFFFF) };
 	unsigned int h;
-
+    
+    /*******************************************
+     * 如果当前没有注册任何的helper, 则返回NULL
+     * *****************************************/
 	if (!nf_ct_helper_count)
 		return NULL;
 
+    /*******************************************
+     * 取5元组的hash值，然后在hash表中查找
+     * *****************************************/
 	h = helper_hash(tuple);
 	hlist_for_each_entry_rcu(helper, &nf_ct_helper_hash[h], hnode) {
+        /************************************************************
+         * 如果五元组相同(其实 dst ip 和 dst port是没有比较的
+         * 所以实际上只比较了 src ip，src port，l3num，l4proto)，
+         * 则匹配到helper了
+         * **********************************************************/
 		if (nf_ct_tuple_src_mask_cmp(tuple, &helper->tuple, &mask))
 			return helper;
 	}
@@ -210,6 +221,9 @@ int __nf_ct_try_assign_helper(struct nf_conn *ct, struct nf_conn *tmpl,
 
 	help = nfct_help(ct);
 	if (net->ct.sysctl_auto_assign_helper && helper == NULL) {
+        /*********************************************************************
+         * 根据REPLY方向的5元组(其中协议信息和source ip/port)来匹配合适的helper
+         * *******************************************************************/
 		helper = __nf_ct_helper_find(&ct->tuplehash[IP_CT_DIR_REPLY].tuple);
 		if (unlikely(!net->ct.auto_assign_helper_warned && helper)) {
 			pr_info("nf_conntrack: automatic helper "

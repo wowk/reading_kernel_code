@@ -911,6 +911,30 @@ out_put_peer:
 	inet_putpeer(peer);
 }
 
+/*************************************************************
+ * 处理各种IP相关错误
+ * 主要是针对路由查找的错误，如：
+ *      1. 网络不可达
+ *      2. 地址不可达
+ * 常规的路由查找没找到匹配的路由会导致这种错误，
+ * ip route中的一个action UNREACHABLE也会触发这个错误，当匹配
+ * 到一条action为UNREACHABLE的路由的时候，就会触发。
+ *
+ * 另外根据如下的实现，只有当interface配置了forward选项的时候
+ * 才会同时发送 UNREACHABLE ICMP报文
+ *
+ * 对于 被 filtered 的包，也会在此处处理，同样是返回一个不可达
+ * 的报文，但是其中的 Code会被设置为（ICMP_PKT_FILTERED)
+ *
+ * filter的功能对应于 ip route 中的 prohibit action
+ *
+ * 以上这些错误也可以通过 iptables 触发
+ *
+ *
+ * ip route中还有一种blackhole的action，不再此处处理，而是
+ * 构成一个单独的 dst_output , 此output只是简单的丢弃包，而不
+ * 会发送
+ * **********************************************************/
 static int ip_error(struct sk_buff *skb)
 {
 	struct in_device *in_dev = __in_dev_get_rcu(skb->dev);
@@ -926,6 +950,10 @@ static int ip_error(struct sk_buff *skb)
 		goto out;
 
 	net = dev_net(rt->dst.dev);
+    /************************************************
+     * 当FORWARD选项没打开的时候，只更新下统计信息，
+     * 然后就退出
+     * *********************************************/
 	if (!IN_DEV_FORWARD(in_dev)) {
 		switch (rt->dst.error) {
 		case EHOSTUNREACH:
@@ -1836,7 +1864,9 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	bool do_cache;
 
 	/* IP on this device is disabled. */
-
+    /********************************************
+     * 表示没有可用的IPv4地址
+     * ******************************************/
 	if (!in_dev)
 		goto out;
 
@@ -1849,6 +1879,10 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		fl4.flowi4_tun_key.tun_id = tun_info->key.tun_id;
 	else
 		fl4.flowi4_tun_key.tun_id = 0;
+    /********************************************
+     * 如果之前已经有 dst entry了，则release这个
+     * entry，然后重新进行路由查找
+     * ******************************************/
 	skb_dst_drop(skb);
 
 	if (ipv4_is_multicast(saddr) || ipv4_is_lbcast(saddr))
@@ -1861,7 +1895,8 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 
 	/* Accept zero addresses only to limited broadcast;
 	 * I even do not know to fix it or not. Waiting for complains :-)
-	 */
+	 * 如果地址是全0, 则简单的丢弃就行了
+     */
 	if (ipv4_is_zeronet(saddr))
 		goto martian_source;
 
@@ -1881,8 +1916,15 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 
 	/*
 	 *	Now we are ready to route packet.
+     *	开始构造flowi4结构，然后进行路由查询
 	 */
 	fl4.flowi4_oif = 0;
+    /********************************************
+     * l3mdev_fib_oif_rc 用于获取一个netdevice
+     * 的 ifindex，如果这个dev是某个 device（比如
+     * 一个bridge）的slave设备，则获取master设备
+     * 的ifindex并返回
+     * *****************************************/
 	fl4.flowi4_iif = l3mdev_fib_oif_rcu(dev);
 	fl4.flowi4_mark = skb->mark;
 	fl4.flowi4_tos = tos;
@@ -1890,6 +1932,9 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	fl4.flowi4_flags = 0;
 	fl4.daddr = daddr;
 	fl4.saddr = saddr;
+    /*******************************************
+     * 进行路由表的查找
+     * ****************************************/
 	err = fib_lookup(net, &fl4, &res, 0);
 	if (err != 0) {
 		if (!IN_DEV_FORWARD(in_dev))
@@ -2971,6 +3016,9 @@ static __net_initdata struct pernet_operations ipv4_inetpeer_ops = {
 struct ip_rt_acct __percpu *ip_rt_acct __read_mostly;
 #endif /* CONFIG_IP_ROUTE_CLASSID */
 
+/************************************************************
+ * 路由子系统的初始化
+ * **********************************************************/
 int __init ip_rt_init(void)
 {
 	int rc = 0;

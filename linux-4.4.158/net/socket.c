@@ -1091,6 +1091,9 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 {
 	int err;
 	struct socket *sock;
+    /************************************************
+     * 指定协议族的创建接口
+     * **********************************************/
 	const struct net_proto_family *pf;
 
 	/*
@@ -1116,11 +1119,16 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 		family = PF_PACKET;
 	}
 
+    /************************************************************
+     * 检查是否 有权限创建该类型socket
+     * **********************************************************/
 	err = security_socket_create(family, type, protocol, kern);
 	if (err)
 		return err;
 
-	/*
+	/* 
+     *  到达此处说明有权限创建该类型的socket，开始创建
+     *
 	 *	Allocate the socket and allow the family to set things up. if
 	 *	the protocol is 0, the family is instructed to select an appropriate
 	 *	default.
@@ -1144,7 +1152,11 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	if (rcu_access_pointer(net_families[family]) == NULL)
 		request_module("net-pf-%d", family);
 #endif
-
+    /*****************************************************
+     * 根据family type找到指定的 net_proto_family 对象
+     *
+     * 通过 pf->create 接口来创建socket
+     * ***************************************************/
 	rcu_read_lock();
 	pf = rcu_dereference(net_families[family]);
 	err = -EAFNOSUPPORT;
@@ -1160,7 +1172,10 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 
 	/* Now protected by module ref count */
 	rcu_read_unlock();
-
+    
+    /******************************************************
+     * 实际的创建动作
+     * ****************************************************/
 	err = pf->create(net, sock, protocol, kern);
 	if (err < 0)
 		goto out_module_put;
@@ -1222,15 +1237,25 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
 	BUILD_BUG_ON((SOCK_MAX | SOCK_TYPE_MASK) != SOCK_TYPE_MASK);
 	BUILD_BUG_ON(SOCK_CLOEXEC & SOCK_TYPE_MASK);
 	BUILD_BUG_ON(SOCK_NONBLOCK & SOCK_TYPE_MASK);
-
+   
+    /**********************************************
+     * 检查 type 是否有效
+     * ********************************************/
 	flags = type & ~SOCK_TYPE_MASK;
 	if (flags & ~(SOCK_CLOEXEC | SOCK_NONBLOCK))
 		return -EINVAL;
 	type &= SOCK_TYPE_MASK;
 
+    /**********************************************************
+     * SOCK_NONBLOCK 实际上的定义就是 O_NONBLOCK
+     * 如果不是，则将其设置为与 O_NONBLOCK 相同
+     * ********************************************************/
 	if (SOCK_NONBLOCK != O_NONBLOCK && (flags & SOCK_NONBLOCK))
 		flags = (flags & ~SOCK_NONBLOCK) | O_NONBLOCK;
 
+    /**********************************************************
+     * 开始创建 socket 对象
+     * ********************************************************/
 	retval = sock_create(family, type, protocol, &sock);
 	if (retval < 0)
 		goto out;

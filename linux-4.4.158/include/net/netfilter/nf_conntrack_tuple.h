@@ -159,11 +159,23 @@ nf_ct_tuple_src_mask_cmp(const struct nf_conntrack_tuple *t1,
 	int count;
 
 	for (count = 0; count < NF_CT_TUPLE_L3SIZE; count++) {
+        /******************************************************
+         * 此处先异或再与的操作目的是比较两个值是否相等，如果相
+         * 等则异或的结果为0, 0与mask做&操作的结果就是0, 否则结
+         * 果一定部位0，
+         *
+         * 其效果与 
+         *   t1->src.u3.all[count] != t2->src.u3.all[count]
+         * 一样
+         * ****************************************************/
 		if ((t1->src.u3.all[count] ^ t2->src.u3.all[count]) &
 		    mask->src.u3.all[count])
 			return false;
 	}
 
+    /********************************************************
+     * 同上，是比较 t1->src.u.all != t2->src.u.all
+     * ******************************************************/
 	if ((t1->src.u.all ^ t2->src.u.all) & mask->src.u.all)
 		return false;
 

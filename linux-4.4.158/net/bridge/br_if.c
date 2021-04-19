@@ -496,7 +496,8 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 		return -EBUSY;
 
 	/* ******************************************************
-     * 如果一个 netdevice 了，则一个设备就不能加入bridge
+     * 如果一个 netdevice 设置了DONT_BRIDGE标识了，则一个设备
+     * 就不能加入bridge
      * No bridging devices that dislike that (e.g. wireless) 
      * *****************************************************/
 	if (dev->priv_flags & IFF_DONT_BRIDGE)

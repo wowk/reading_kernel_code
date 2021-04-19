@@ -215,6 +215,12 @@ bool nf_ct_get_tuplepr(const struct sk_buff *skb, unsigned int nhoff,
 }
 EXPORT_SYMBOL_GPL(nf_ct_get_tuplepr);
 
+/*******************************************************************************
+ * 该函数的功能如下：
+ *      将五元组反向然后保存到 inverse 中
+ *      orig    = (src_ip, src_port, dst_ip, dst_port, dir)
+ *      inverse = invert(orig) => (dst_ip, dst_port, src_ip, src_port, !dir)
+ * *****************************************************************************/
 bool
 nf_ct_invert_tuple(struct nf_conntrack_tuple *inverse,
 		   const struct nf_conntrack_tuple *orig,
@@ -224,12 +230,25 @@ nf_ct_invert_tuple(struct nf_conntrack_tuple *inverse,
 	memset(inverse, 0, sizeof(*inverse));
 
 	inverse->src.l3num = orig->src.l3num;
-	if (l3proto->invert_tuple(inverse, orig) == 0)
+    /***********************************************
+     * 该操作所做的动作如下:
+     *     inverse->src_ip  = orig->dst_ip
+     *     inverse->dst_ip  = orig->src_ip
+     * *********************************************/
+    if (l3proto->invert_tuple(inverse, orig) == 0)
 		return false;
 
+    /***********************************
+     * 方向反转
+     * ********************************/
 	inverse->dst.dir = !orig->dst.dir;
 
 	inverse->dst.protonum = orig->dst.protonum;
+    /***********************************************
+     * 该操作所做的动作如下:
+     *     inverse->src_port  = orig->dst_port
+     *     inverse->dst_port  = orig->src_port
+     * *********************************************/
 	return l4proto->invert_tuple(inverse, orig);
 }
 EXPORT_SYMBOL_GPL(nf_ct_invert_tuple);
@@ -930,12 +949,20 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	struct nf_conntrack_zone tmp;
 	unsigned int *timeouts;
 
+    /*****************************************************************
+     * 将tuple的反向信息存放到 repl_tuple
+     * (根据此函数的作用判断，此处的repl代表的应该是reply)
+     * ***************************************************************/
 	if (!nf_ct_invert_tuple(&repl_tuple, tuple, l3proto, l4proto)) {
 		pr_debug("Can't invert tuple.\n");
 		return NULL;
 	}
 
+    /******************************************
+     * FIXME:ZONE是什么以及起什么作用 ？
+     * ****************************************/
 	zone = nf_ct_zone_tmpl(tmpl, skb, &tmp);
+
 	ct = __nf_conntrack_alloc(net, zone, tuple, &repl_tuple, GFP_ATOMIC,
 				  hash);
 	if (IS_ERR(ct))
@@ -979,6 +1006,10 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 		spin_lock(&nf_conntrack_expect_lock);
 		exp = nf_ct_find_expectation(net, zone, tuple);
 		if (exp) {
+            /*************************************************************
+             * if find expectation, that means a master conntrack is
+             * expecting current conntrack
+             * ***********************************************************/
 			pr_debug("conntrack: expectation arrives ct=%p exp=%p\n",
 				 ct, exp);
 			/* Welcome, Mr. Bond.  We've been expecting you... */
@@ -1002,6 +1033,11 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 		}
 		spin_unlock(&nf_conntrack_expect_lock);
 	}
+    /*********************************************************
+     * 如果当前的conntrack没有对应expectation，也就是说，没有
+     * 其他conntrack在等待我们，那么，尝试去匹配一个helper,因
+     * 为可能有helper想要处理我们这个包
+     * ******************************************************/
 	if (!exp) {
 		__nf_ct_try_assign_helper(ct, tmpl, GFP_ATOMIC);
 		NF_CT_STAT_INC(net, new);
