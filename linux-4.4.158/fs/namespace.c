@@ -203,10 +203,18 @@ static void drop_mountpoint(struct fs_pin *p)
 
 static struct mount *alloc_vfsmnt(const char *name)
 {
+    /******************************************************
+     * 通过 slab 对象分配接口 实例化一个 struct mount 对象
+     *
+     * ****************************************************/
 	struct mount *mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
 	if (mnt) {
 		int err;
-
+        
+        /**************************************************
+         *
+         * 分配一个 mount ID
+         * ************************************************/
 		err = mnt_alloc_id(mnt);
 		if (err)
 			goto out_free_cache;
@@ -216,7 +224,7 @@ static struct mount *alloc_vfsmnt(const char *name)
 			if (!mnt->mnt_devname)
 				goto out_free_id;
 		}
-
+    
 #ifdef CONFIG_SMP
 		mnt->mnt_pcp = alloc_percpu(struct mnt_pcp);
 		if (!mnt->mnt_pcp)
@@ -227,7 +235,10 @@ static struct mount *alloc_vfsmnt(const char *name)
 		mnt->mnt_count = 1;
 		mnt->mnt_writers = 0;
 #endif
-
+        
+        /***************************************************
+         * 初始化mount相关的链表成员
+         * *************************************************/
 		INIT_HLIST_NODE(&mnt->mnt_hash);
 		INIT_LIST_HEAD(&mnt->mnt_child);
 		INIT_LIST_HEAD(&mnt->mnt_mounts);
@@ -241,6 +252,9 @@ static struct mount *alloc_vfsmnt(const char *name)
 #ifdef CONFIG_FSNOTIFY
 		INIT_HLIST_HEAD(&mnt->mnt_fsnotify_marks);
 #endif
+        /***************************************************
+         * 初始化一个等待队列，用于kill时候的处理
+         * */
 		init_fs_pin(&mnt->mnt_umount, drop_mountpoint);
 	}
 	return mnt;
@@ -977,16 +991,28 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	struct mount *mnt;
 	struct dentry *root;
 
+    /***********************************************
+     * 参数 type 是必需的，不能为空
+     * *********************************************/
 	if (!type)
 		return ERR_PTR(-ENODEV);
 
+    /***********************************************
+     * 创建一个 struct mount 对象
+     * *********************************************/
 	mnt = alloc_vfsmnt(name);
 	if (!mnt)
 		return ERR_PTR(-ENOMEM);
-
+    
+    /***********************************************
+     * mount的flags，表示是内核发起的挂载动作 ？？？
+     * *********************************************/
 	if (flags & MS_KERNMOUNT)
 		mnt->mnt.mnt_flags = MNT_INTERNAL;
-
+    
+    /************************************************
+     * mount 文件系统
+     * **********************************************/
 	root = mount_fs(type, flags, name, data);
 	if (IS_ERR(root)) {
 		mnt_free_id(mnt);
@@ -994,6 +1020,9 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 		return ERR_CAST(root);
 	}
 
+    /************************************************
+     * 将mount实例加入到当前文件系统的已挂载链表zhong
+     * **********************************************/
 	mnt->mnt.mnt_root = root;
 	mnt->mnt.mnt_sb = root->d_sb;
 	mnt->mnt_mountpoint = mnt->mnt.mnt_root;
@@ -3265,6 +3294,11 @@ void put_mnt_ns(struct mnt_namespace *ns)
 struct vfsmount *kern_mount_data(struct file_system_type *type, void *data)
 {
 	struct vfsmount *mnt;
+
+    /*********************************************************
+     * 创建 vfsmount 挂载项,
+     * 挂载在内核内部使用的MOUNT命名空间
+     * *******************************************************/
 	mnt = vfs_kern_mount(type, MS_KERNMOUNT, type->name, data);
 	if (!IS_ERR(mnt)) {
 		/*

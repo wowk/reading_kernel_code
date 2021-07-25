@@ -204,23 +204,40 @@ static int ramfs_parse_options(char *data, struct ramfs_mount_opts *opts)
 	return 0;
 }
 
+
+/*******************************************************************
+ *
+ * 超级块的信息填充，在文件系统挂载的时候会用到
+ * 
+ * 但是，只是在第一个 ramfs 挂载的时候才会用到
+ *
+ * 当后续的挂载动作发生时候，该函数不会被调用到
+ *
+ * 因为超级块已经初始化了
+ * *****************************************************************/
 int ramfs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct ramfs_fs_info *fsi;
 	struct inode *inode;
 	int err;
-
+    
+    
+    //通用的mount options, 用于显示时候使用
+    //此处的data是用户传过来的options
 	save_mount_options(sb, data);
-
+    
+    //创建一个文件系统的private data数据结构
 	fsi = kzalloc(sizeof(struct ramfs_fs_info), GFP_KERNEL);
 	sb->s_fs_info = fsi;
 	if (!fsi)
 		return -ENOMEM;
-
+    
+    //解析文件系统挂载选项
 	err = ramfs_parse_options(data, &fsi->mount_opts);
 	if (err)
 		return err;
-
+    
+    //初始化一下超级块的
 	sb->s_maxbytes		= MAX_LFS_FILESIZE;
 	sb->s_blocksize		= PAGE_CACHE_SIZE;
 	sb->s_blocksize_bits	= PAGE_CACHE_SHIFT;
@@ -228,6 +245,7 @@ int ramfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_op		= &ramfs_ops;
 	sb->s_time_gran		= 1;
 
+    // 创建一个inode 和 一个 dentry， 当过挂载点的根目录
 	inode = ramfs_get_inode(sb, NULL, S_IFDIR | fsi->mount_opts.mode, 0);
 	sb->s_root = d_make_root(inode);
 	if (!sb->s_root)
@@ -239,28 +257,40 @@ int ramfs_fill_super(struct super_block *sb, void *data, int silent)
 struct dentry *ramfs_mount(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
 {
+    //默认挂载函数，该函数不与任何的物理设备关联，是一个虚拟文件系统
 	return mount_nodev(fs_type, flags, data, ramfs_fill_super);
 }
 
 static void ramfs_kill_sb(struct super_block *sb)
 {
+    //释放文件系统的private数据
+    //既然卸载的时候会释放，那就意味着挂载的时候会分配
 	kfree(sb->s_fs_info);
+
+    //reduce super_block的持有计数
 	kill_litter_super(sb);
 }
 
 static struct file_system_type ramfs_fs_type = {
 	.name		= "ramfs",
-	.mount		= ramfs_mount,
-	.kill_sb	= ramfs_kill_sb,
-	.fs_flags	= FS_USERNS_MOUNT,
+	.mount		= ramfs_mount,      //文件系统挂载的时候调用这个回调函数
+	.kill_sb	= ramfs_kill_sb,    //文件系统卸载的时候调用这个回调函数
+	.fs_flags	= FS_USERNS_MOUNT,  //挂载flags，默认是用户命名空间
 };
 
 int __init init_ramfs_fs(void)
 {
 	static unsigned long once;
-
+    
+    /********************************************
+     * 当前模块只能加载一次
+     * ******************************************/
 	if (test_and_set_bit(0, &once))
 		return 0;
+
+    /********************************************
+     * 注册ramfs文件系统
+     * ******************************************/
 	return register_filesystem(&ramfs_fs_type);
 }
 fs_initcall(init_ramfs_fs);
