@@ -650,6 +650,7 @@ static int netlink_create(struct net *net, struct socket *sock, int protocol,
 
 	sock->state = SS_UNCONNECTED;
 
+    /* domain 只支持 SOCK_RAW 或 SOCK_DGRAM */
 	if (sock->type != SOCK_RAW && sock->type != SOCK_DGRAM)
 		return -ESOCKTNOSUPPORT;
 
@@ -1608,6 +1609,9 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 		return -EFAULT;
 
 	switch (optname) {
+    /*******************************************************
+     * 获取收到的 nlmsg 是谁发来的
+     * *****************************************************/
 	case NETLINK_PKTINFO:
 		if (val)
 			nlk->flags |= NETLINK_F_RECV_PKTINFO;
@@ -1615,6 +1619,13 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 			nlk->flags &= ~NETLINK_F_RECV_PKTINFO;
 		err = 0;
 		break;
+
+    /******************************************************
+     * 这个和创建netlink socket的时候指定 groups 一样，
+     * 只不过创建时是指定多个，此处是 指定 单个，
+     *
+     * 支持 加入和 退出 group
+     * ****************************************************/
 	case NETLINK_ADD_MEMBERSHIP:
 	case NETLINK_DROP_MEMBERSHIP: {
 		if (!netlink_allowed(sock, NL_CFG_F_NONROOT_RECV))
@@ -2599,6 +2610,9 @@ static const struct proto_ops netlink_ops = {
 
 static const struct net_proto_family netlink_family_ops = {
 	.family = PF_NETLINK,
+    /*******************************************************
+     * 创建socket的时候会调用这个函数
+     * *****************************************************/
 	.create = netlink_create,
 	.owner	= THIS_MODULE,	/* for consistency 8) */
 };
@@ -2664,6 +2678,11 @@ static const struct rhashtable_params netlink_rhashtable_params = {
 static int __init netlink_proto_init(void)
 {
 	int i;
+    /***********************************************
+     * 将协议信息注册到 proto_list
+     *
+     * 这个协议列表可以通过 /proc/net/protocols 查看
+     * *********************************************/
 	int err = proto_register(&netlink_proto, 0);
 
 	if (err != 0)
@@ -2688,10 +2707,29 @@ static int __init netlink_proto_init(void)
 	INIT_LIST_HEAD(&netlink_tap_all);
 
 	netlink_add_usersock_entry();
-
+    
+    /****************************************************
+     * 注册 netlink socket
+     *
+     * 具体的表为 net_families
+     * **************************************************/
 	sock_register(&netlink_family_ops);
+
+    /****************************************************
+     * 创建 netlink proc /proc/net/netlink
+     * **************************************************/
 	register_pernet_subsys(&netlink_net_ops);
-	/* The netlink device handler may be needed early. */
+
+	/* The netlink device handler may be needed early. 
+     *
+     * route netlink 的初始化，包括各种 Action：
+     *      RTM_GETADDR
+     *      RTM_NEWADDR
+     *      RTM_GETLINK
+     *      RTM_NEWLINK
+     *      ........
+     *      
+     * **************************************************/
 	rtnetlink_init();
 out:
 	return err;

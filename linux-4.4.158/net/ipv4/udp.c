@@ -1084,6 +1084,8 @@ back_from_confirm:
 	}
 	/*
 	 *	Now cork the socket to pend data.
+     *
+     *	每次发送包之后如果当前都会设置下pending字段，如果
 	 */
 	fl4 = &inet->cork.fl.u.ip4;
 	fl4->daddr = daddr;

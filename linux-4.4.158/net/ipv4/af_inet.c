@@ -260,12 +260,18 @@ static int inet_create(struct net *net, struct socket *sock, int protocol,
 	if (protocol < 0 || protocol >= IPPROTO_MAX)
 		return -EINVAL;
 
+    /***************************************
+     * 状态设置为 UNCONNECTED
+     * *************************************/
 	sock->state = SS_UNCONNECTED;
 
 	/* Look for the requested type/protocol pair. */
 lookup_protocol:
 	err = -ESOCKTNOSUPPORT;
 	rcu_read_lock();
+    /***********************************************************
+     * 从 inetsw数组中找到注册的 四层协类型
+     * *********************************************************/
 	list_for_each_entry_rcu(answer, &inetsw[sock->type], list) {
 
 		err = 0;
@@ -984,12 +990,14 @@ static const struct proto_ops inet_sockraw_ops = {
 
 static const struct net_proto_family inet_family_ops = {
 	.family = PF_INET,
-	.create = inet_create,
+	.create = inet_create,  /* 创建 socket 的时候的核心函数 */
 	.owner	= THIS_MODULE,
 };
 
 /* Upon startup we insert all the elements in inetsw_array[] into
  * the linked list inetsw.
+ *
+ * IPv4 所有支持的四层类型都定义在此处
  */
 static struct inet_protosw inetsw_array[] =
 {

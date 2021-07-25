@@ -3498,8 +3498,17 @@ void __init rtnetlink_init(void)
 	if (register_pernet_subsys(&rtnetlink_net_ops))
 		panic("rtnetlink_init: cannot initialize rtnetlink\n");
 
+    /********************************************************
+     * 注册 netdevice 事件通知链处理函数，此处使用的是
+     *          rtnetlink_event
+     *
+     * 目前该事件处理函数只会触发 RTM_NEWLINK 通知
+     * ******************************************************/
 	register_netdevice_notifier(&rtnetlink_dev_notifier);
 
+    /********************************************************
+     * 如果想增加新的Action，就可以在此处注册
+     * ******************************************************/
 	rtnl_register(PF_UNSPEC, RTM_GETLINK, rtnl_getlink,
 		      rtnl_dump_ifinfo, rtnl_calcit);
 	rtnl_register(PF_UNSPEC, RTM_SETLINK, rtnl_setlink, NULL, NULL);

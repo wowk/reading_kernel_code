@@ -1270,6 +1270,17 @@ int neigh_update(struct neighbour *neigh, const u8 *lladdr, u8 new,
 		neigh_connect(neigh);
 	else
 		neigh_suspect(neigh);
+
+    /*****************************************************************
+     * 这一段是用于处理收到 ARPREPLY/NA 的情况
+     * 如果收到的包会将 当前neigh entry的状态更新成 VALID 状态，则继续
+     * 下面的流程进行处理
+     *
+     * 当收到这两中包并且这包是发给本机的，则IPv4/IPv6处理函数会调用
+     * neigh_update来到这儿，查看当前对应的 neigh entry的arp_queue中
+     * 是否有之前pending的包，如果有，则将pending的包发送出去
+     *
+     * ***************************************************************/
 	if (!(old & NUD_VALID)) {
 		struct sk_buff *skb;
 

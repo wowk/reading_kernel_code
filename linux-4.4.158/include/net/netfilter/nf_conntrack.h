@@ -80,33 +80,81 @@ struct nf_conn {
 	 * Helper nf_ct_put() equals nf_conntrack_put() by dec refcnt,
 	 * beware nf_ct_get() is different and don't inc refcnt.
 	 */
-	struct nf_conntrack ct_general;
+    /*************************************************
+     * 该结构只有一个成员
+     *      atomic_t use;
+     * 用于记录当前conntrack应用数量
+     * ***********************************************/
+    struct nf_conntrack ct_general;
 
 	spinlock_t	lock;
 	u16		cpu;
 
 	/* XXX should I move this to the tail ? - Y.K */
 	/* These are my tuples; original and reply */
-	struct nf_conntrack_tuple_hash tuplehash[IP_CT_DIR_MAX];
+    /********************************************************
+     * nf_conntrack_tuple_hash 
+     * 其中有两个成员:
+     *      struct nf_conntrack_tuple tuple;
+     *      struct hlist_nulls_node   hnnode;
+     * 存在 hlist_nulls_node 成员表示nf_conntrack_tuple_hash
+     * 被组织在一个 hlist 中，可以通过 hash 查找找到
+     *
+     * struct nf_conntrack_tuple 中包含了五元组的信息
+     * （（源IP地址，目的IP地址，源端口，目的端口，协议号），三层协议号)
+     *
+     * ******************************************************/
+    struct nf_conntrack_tuple_hash tuplehash[IP_CT_DIR_MAX];
 
-	/* Have we seen traffic both ways yet? (bitset) */
+	/* Have we seen traffic both ways yet? (bitset) 
+     * 这个成员描述了当前conntrack的状态
+     * 可以是如下状态
+     * 1. 是否需要SNAT，DNAT
+     * 2. 是否完成了 SNAT和DNAT
+     * 3. 是否存在helper
+     * 4. 是否存在REPLY
+     * 5. ..........
+     * IP_SEEN_REPLY,
+     * IP_UNTRACKED,
+     * IP_HELPER,
+     * IP_SRC_NAT,
+     * IP_SRC_NAT_DONE,
+     * IP_DST_NAT,
+     * IP_DST_NAT_DONE,
+     * IP_FIXED_TIMEOUT,
+     * .............
+     * */
 	unsigned long status;
 
 	/* Timer function; drops refcnt when it goes off. */
 	struct timer_list timeout;
 
+    /**********************************************
+     * 该成员只有一个 
+     *      struct net * net
+     * 用于描述当前 nf_conn 是属于那个net namespace
+     * ********************************************/
 	possible_net_t ct_net;
 
 	/* all members below initialized via memset */
 	u8 __nfct_init_offset[0];
 
-	/* If we were expected by an expectation, this will be it */
+	/* If we were expected by an expectation, this will be it 
+     * 如果当前conntrack是由于EXPECTED状态而生成的，则
+     * 这个成员会被设置
+     * */
 	struct nf_conn *master;
 
+    /*********************************
+     * 这个成员的用途是什么 ？
+     * *******************************/
 #if defined(CONFIG_NF_CONNTRACK_MARK)
 	u_int32_t mark;
 #endif
 
+    /*********************************
+     * 这个成员的用途是什么 ？
+     * *******************************/
 #ifdef CONFIG_NF_CONNTRACK_SECMARK
 	u_int32_t secmark;
 #endif

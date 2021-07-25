@@ -19,8 +19,14 @@ struct nf_conntrack_expect {
 	struct hlist_node hnode;
 
 	/* We expect this tuple, with the following mask */
+    /***********************************
+     * 地址端口5元组
+     * *********************************/
 	struct nf_conntrack_tuple tuple;
-	struct nf_conntrack_tuple_mask mask;
+	/***********************************
+     * 地址和端口的掩码
+     * *********************************/
+    struct nf_conntrack_tuple_mask mask;
 
 	/* Function to call after setup and insertion */
 	void (*expectfn)(struct nf_conn *new,

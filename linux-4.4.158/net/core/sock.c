@@ -2884,6 +2884,8 @@ int proto_register(struct proto *prot, int alloc_slab)
 	mutex_lock(&proto_list_mutex);
     /*******************************************
      * 将 prot 加入 proto_list 链表
+     *
+     * 可以通过 /proc/net/protocols
      * ****************************************/
 	list_add(&prot->node, &proto_list);
 

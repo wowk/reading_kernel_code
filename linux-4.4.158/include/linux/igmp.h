@@ -78,8 +78,8 @@ struct ip_sf_list {
 struct ip_mc_list {
 	struct in_device	*interface;
 	__be32			multiaddr;
-	unsigned int		sfmode;
-	struct ip_sf_list	*sources;
+	unsigned int		sfmode;         /* 当前是 INCLUDE/EXCLUDE */
+	struct ip_sf_list	*sources;       /* 当前的sources list */
 	struct ip_sf_list	*tomb;
 	unsigned long		sfcount[2];
 	union {
