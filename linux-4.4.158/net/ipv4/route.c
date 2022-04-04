@@ -1890,6 +1890,9 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 
 	res.fi = NULL;
 	res.table = NULL;
+    /*****************************************************
+     * 如果目的地址是广播地址，则跳到 brd_input
+     * ***************************************************/
 	if (ipv4_is_lbcast(daddr) || (saddr == 0 && daddr == 0))
 		goto brd_input;
 
@@ -1920,10 +1923,16 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	 */
 	fl4.flowi4_oif = 0;
     /********************************************
-     * l3mdev_fib_oif_rc 用于获取一个netdevice
-     * 的 ifindex，如果这个dev是某个 device（比如
-     * 一个bridge）的slave设备，则获取master设备
-     * 的ifindex并返回
+     * l3mdev 意思为 layer3 master device
+     * 就是说尝试获取 dev 的 master device
+     * 如果，不存在则返回 dev->ifindex
+     *
+     * 根据目前的了解，VRF （Virtual Routing and Forwarding）
+     * 就是一个 l3mdev
+     *
+     * 如果当前 port 是 VRF 的一个 slave，则返回VRF的 ifindex
+     * 否则返回 dev->ifindex
+     *
      * *****************************************/
 	fl4.flowi4_iif = l3mdev_fib_oif_rcu(dev);
 	fl4.flowi4_mark = skb->mark;
@@ -1932,6 +1941,7 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	fl4.flowi4_flags = 0;
 	fl4.daddr = daddr;
 	fl4.saddr = saddr;
+
     /*******************************************
      * 进行路由表的查找
      * ****************************************/

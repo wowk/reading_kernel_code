@@ -28,6 +28,10 @@
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
 
+
+/************************************************
+ * panic on oops 的默认值可以配置
+ * **********************************************/
 int panic_on_oops = CONFIG_PANIC_ON_OOPS_VALUE;
 static unsigned long tainted_mask;
 static int pause_on_oops;
@@ -36,9 +40,18 @@ static DEFINE_SPINLOCK(pause_on_oops_lock);
 bool crash_kexec_post_notifiers;
 int panic_on_warn __read_mostly;
 
+/***********************************************************
+ * 设置接口为 /proc/sys/kernel/panic
+ *
+ * 其值用于决定 panic 发生后重启的时间
+ * ********************************************************/
 int panic_timeout = CONFIG_PANIC_TIMEOUT;
 EXPORT_SYMBOL_GPL(panic_timeout);
 
+/**********************************************************
+ * panic 还支持 notifier 通知链
+ * 当发生 panic 的时候，就会通知这个链表上的 listener
+ * ********************************************************/
 ATOMIC_NOTIFIER_HEAD(panic_notifier_list);
 
 EXPORT_SYMBOL(panic_notifier_list);
@@ -54,9 +67,14 @@ EXPORT_SYMBOL(panic_blink);
 
 /*
  * Stop ourself in panic -- architecture code may override this
+ *
  */
 void __weak panic_smp_self_stop(void)
 {
+    /*****************************************
+     * cpu_relax 的函数内部就是
+     * 一个 nop 操作循环，也就是空等待死循环
+     * **************************************/
 	while (1)
 		cpu_relax();
 }
@@ -98,15 +116,29 @@ void panic(const char *fmt, ...)
 	if (!spin_trylock(&panic_lock))
 		panic_smp_self_stop();
 
+    /**************************************
+     * 设定 console_log_level
+     * ***********************************/
 	console_verbose();
 	bust_spinlocks(1);
+
+    /**************************************
+     * panic msg 序列化
+     * ************************************/
 	va_start(args, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, args);
 	va_end(args);
+
+    /********************************************
+     * 从这个地方看， not syncing 后面就是实际
+     * panic 发生的原因
+     * *****************************************/
 	pr_emerg("Kernel panic - not syncing: %s\n", buf);
 #ifdef CONFIG_DEBUG_BUGVERBOSE
 	/*
 	 * Avoid nested stack-dumping if a panic occurs during oops processing
+     *
+     * 打印 calltrace
 	 */
 	if (!test_taint(TAINT_DIE) && oops_in_progress <= 1)
 		dump_stack();
@@ -117,6 +149,8 @@ void panic(const char *fmt, ...)
 	 * everything else.
 	 * If we want to run this after calling panic_notifiers, pass
 	 * the "crash_kexec_post_notifiers" option to the kernel.
+     *
+     * 如果有 crash kernel，则加载crash kernel
 	 */
 	if (!crash_kexec_post_notifiers)
 		crash_kexec(NULL);
@@ -131,9 +165,19 @@ void panic(const char *fmt, ...)
 	/*
 	 * Run any panic handlers, including those that might need to
 	 * add information to the kmsg dump output.
+     *
+     * 调用注册到 panic_notifier_list 通知链上的 listener 的 callback
 	 */
 	atomic_notifier_call_chain(&panic_notifier_list, 0, buf);
 
+
+    /*****************************************************************
+     * 调用注册到 kmsg dump 事件链表上的 回调函数，用于保存发生
+     * panic 时的 calltrace信息，其内部是通过访问 syslog message 的
+     * ring buffer 来实现的
+     *
+     * 目前 ramoops 和 mtdoops 都是通过这个kmsg实现的
+     * **************************************************************/
 	kmsg_dump(KMSG_DUMP_PANIC);
 
 	/*
@@ -166,6 +210,8 @@ void panic(const char *fmt, ...)
 		/*
 		 * Delay timeout seconds before rebooting the machine.
 		 * We can't use the "normal" timers since we just panicked.
+         *
+         * 延迟 panic_timeout 时间后重启，单位为 秒
 		 */
 		pr_emerg("Rebooting in %d seconds..\n", panic_timeout);
 
