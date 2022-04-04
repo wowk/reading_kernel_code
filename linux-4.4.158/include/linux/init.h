@@ -186,6 +186,62 @@ extern bool initcall_debug;
  * can point at the same handler without causing duplicate-symbol build errors.
  */
 
+ /*****************************************************************
+ * 在此处会将创建的 __initcall_<func>_<id> 放到 section
+ * .initcall<id>.init 段中
+ * 
+ * 在kernel链接器脚本中会定义这些段的位置和排列
+ * 其位置为:  arch/<arch>/kernel/vmlinux.lds 
+ *
+ * id 相当于优先级，目前支持 [0, 7], 并且id越小优先级越高
+ *
+ * 链接器脚本中还会为每个 id 创建一个变量 __initcall<id>_start,
+ * 因为有8个优先级，所以创建了8个变量：
+ *      __initcall0_start,
+ *      __initcall1_start,
+ *      __initcall2_start,
+ *      __initcall3_start,
+ *      __initcall4_start,
+ *      __initcall5_start,
+ *      __initcall6_start,
+ *      __initcall7_start,
+ *
+ * 每个变量标识了 __initcall<id>.init 的位置，
+ * 并且在最后还会创建一个变量 __initcall_end 标识所有的段结束
+ * 其位置排列如下：
+ *      __initcall0_start
+ *      (__initcall0.init)
+ *      __initcall1_start
+ *      (__initcall1.init)
+ *      __initcall2_start
+ *      (__initcall2.init)
+ *      __initcall3_start
+ *      (__initcall3.init)
+ *      __initcall4_start
+ *      (__initcall4.init)
+ *      __initcall5_start
+ *      (__initcall5.init)
+ *      __initcall6_start
+ *      (__initcall6.init)
+ *      __initcall7_start
+ *      (__initcall7.init)
+ *      __initcall_end
+ *
+ * 在链接的时候，每个指定要放到 __initcall<id>.init 中
+ * 会按链接的先后顺序依次放到对应的section所在的位置
+ *
+ * 这样就可以直接通过遍历 [__initcall0_start, __initcall_end] 之间
+ * 的所有项来遍历所有注册的 initcall 项
+ *
+ *
+ * 目前初始化代码处执行 initcall 的地方会按每次
+ * 一个 level (一个id为一个level) 的方式来按序
+ * 调用注册的 initcall function.
+ *
+ * 对于 initcall0, 遍历 [__initcall0_start, __initcall1_start) 之间的所有项
+ *
+ * ***************************************************************/ 
+
 #define __define_initcall(fn, id) \
 	static initcall_t __initcall_##fn##id __used \
 	__attribute__((__section__(".initcall" #id ".init"))) = fn; \
