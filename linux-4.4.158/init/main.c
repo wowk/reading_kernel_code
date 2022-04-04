@@ -418,7 +418,26 @@ static int __init do_early_param(char *param, char *val,
 				 const char *unused, void *arg)
 {
 	const struct obs_kernel_param *p;
-
+    
+    /**********************************************************************
+     * 和 initcall<id>_start/__initcall_end 一样，
+     *
+     * __setup_start 和 __setup_end 也是在kernel的链接器脚本中定义的变量，
+     * 分别代表了 setup.init 段的开始和结尾位置。
+     *
+     * setup.init 段 是存放内核支持的启动参数的列表的位置，通过宏
+     *
+     * __setup_param 可以在程序链接的时候注册内核支持的参数选项到这个列表，
+     * 这个选项对应的结构为  struct obs_kernel_param
+     *
+     * 通常注册的过程中，会提供参数名称，解析参数的function，还有参数的默认值
+     *
+     * 比如当我们使用 ubi 作为root文件系统的时候，通常可挂载的rootfs的位置
+     * 为一个 ubi volume， 通过root指定，这个时候就会提供一个解析这个参数的
+     * function，在这个function的内部调用链会调用 ubi_attach 这个函数，从而
+     * 实现了 attach 对应的 ubi 设备的动作
+     *
+     * ********************************************************************/
 	for (p = __setup_start; p < __setup_end; p++) {
 		if ((p->early && parameq(param, p->str)) ||
 		    (strcmp(param, "console") == 0 &&
